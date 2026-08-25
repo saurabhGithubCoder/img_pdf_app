@@ -18,7 +18,8 @@ import {
   Sliders,
   TrendingDown,
   RotateCcw,
-  Image as ImageIcon
+  Image as ImageIcon,
+  Code
 } from 'lucide-react';
 import {
   mergePDFs,
@@ -36,7 +37,8 @@ import {
   convertWordToPDF,
   checkDocxPassword,
   convertPowerpointToPDF,
-  checkPptxPassword
+  checkPptxPassword,
+  convertHtmlToPDF
 } from '../utils/pdfWorker';
 
 export default function ToolModal({ tool, onClose }) {
@@ -47,11 +49,15 @@ export default function ToolModal({ tool, onClose }) {
   const [lockedFileNames, setLockedFileNames] = useState([]);
 
   // JPG to PDF State
-  const [imageCards, setImageCards] = useState([]); // [{ id, file, previewUrl, rotation }]
+  const [imageCards, setImageCards] = useState([]);
   const [draggedImageIndex, setDraggedImageIndex] = useState(null);
 
   // Compression tool settings
   const [compressionPercent, setCompressionPercent] = useState(45);
+
+  // HTML Tool settings
+  const [htmlInputMode, setHtmlInputMode] = useState('file'); // 'file' | 'code'
+  const [rawHtmlCode, setRawHtmlCode] = useState('');
 
   // Page-selector specific state ('remove', 'extract', 'organize')
   const isPageLevelTool = tool.id === 'remove' || tool.id === 'extract' || tool.id === 'organize';
@@ -145,7 +151,8 @@ export default function ToolModal({ tool, onClose }) {
       isPageLevelTool ||
       tool.id === 'compress' ||
       tool.id === 'word-to-pdf' ||
-      tool.id === 'powerpoint-to-pdf'
+      tool.id === 'powerpoint-to-pdf' ||
+      tool.id === 'html-to-pdf'
     ) {
       setFiles([newFiles[0]]);
     } else {
@@ -160,7 +167,6 @@ export default function ToolModal({ tool, onClose }) {
     }
   };
 
-  // Image Reordering Handlers for JPG to PDF
   const handleImageDragStart = (e, index) => {
     setDraggedImageIndex(index);
     e.dataTransfer.effectAllowed = 'move';
@@ -195,7 +201,6 @@ export default function ToolModal({ tool, onClose }) {
     setFiles(updated.map((c) => c.file));
   };
 
-  // PDF Page Organizing Handlers
   const handlePageDragStart = (e, index) => {
     setDraggedPageIndex(index);
     e.dataTransfer.effectAllowed = 'move';
@@ -333,7 +338,12 @@ export default function ToolModal({ tool, onClose }) {
       return;
     }
 
-    if (files.length === 0 && imageCards.length === 0) {
+    if (tool.id === 'html-to-pdf' && htmlInputMode === 'code' && !rawHtmlCode.trim()) {
+      setErrorMsg('Please enter HTML markup to convert.');
+      return;
+    }
+
+    if (tool.id !== 'html-to-pdf' && files.length === 0 && imageCards.length === 0) {
       setErrorMsg('Please select at least one file.');
       return;
     }
@@ -354,6 +364,9 @@ export default function ToolModal({ tool, onClose }) {
       let output;
 
       switch (tool.id) {
+        case 'html-to-pdf':
+          output = await convertHtmlToPDF(htmlInputMode === 'code' ? rawHtmlCode : files[0]);
+          break;
         case 'powerpoint-to-pdf':
           output = await convertPowerpointToPDF(files[0]);
           break;
@@ -433,6 +446,7 @@ export default function ToolModal({ tool, onClose }) {
     if (tool.id === 'jpg-to-pdf') return 'image/jpeg,image/png,image/webp';
     if (tool.id === 'word-to-pdf') return '.docx,.doc,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword';
     if (tool.id === 'powerpoint-to-pdf') return '.pptx,.ppt,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.ms-powerpoint';
+    if (tool.id === 'html-to-pdf') return '.html,.htm,text/html';
     return 'application/pdf';
   };
 
@@ -440,6 +454,7 @@ export default function ToolModal({ tool, onClose }) {
     if (tool.id === 'jpg-to-pdf') return 'images';
     if (tool.id === 'word-to-pdf') return 'Word documents (.docx)';
     if (tool.id === 'powerpoint-to-pdf') return 'PowerPoint presentations (.pptx)';
+    if (tool.id === 'html-to-pdf') return 'HTML files (.html)';
     return 'PDFs';
   };
 
@@ -462,7 +477,7 @@ export default function ToolModal({ tool, onClose }) {
           <div>
             <h3 className="text-lg font-bold text-slate-900">{tool.name}</h3>
             <p className="text-xs text-slate-500">
-              {tool.id === 'word-to-pdf' || tool.id === 'powerpoint-to-pdf'
+              {['word-to-pdf', 'powerpoint-to-pdf', 'html-to-pdf'].includes(tool.id)
                 ? 'LibreOffice Engine Workspace'
                 : 'Client-Side Secure Workspace'}
             </p>
@@ -497,7 +512,43 @@ export default function ToolModal({ tool, onClose }) {
 
         {!result ? (
           <>
-            {files.length === 0 && imageCards.length === 0 ? (
+            {/* HTML Input Tabs */}
+            {tool.id === 'html-to-pdf' && (
+              <div className="flex border-b border-slate-100 mb-4 pb-2 space-x-4 text-xs font-semibold">
+                <button
+                  type="button"
+                  onClick={() => { setHtmlInputMode('file'); setErrorMsg(''); }}
+                  className={`flex items-center space-x-1.5 pb-1 border-b-2 transition ${
+                    htmlInputMode === 'file' ? 'border-amber-500 text-amber-600' : 'border-transparent text-slate-400 hover:text-slate-600'
+                  }`}
+                >
+                  <UploadCloud className="w-3.5 h-3.5" />
+                  <span>Upload .HTML File</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setHtmlInputMode('code'); setErrorMsg(''); }}
+                  className={`flex items-center space-x-1.5 pb-1 border-b-2 transition ${
+                    htmlInputMode === 'code' ? 'border-amber-500 text-amber-600' : 'border-transparent text-slate-400 hover:text-slate-600'
+                  }`}
+                >
+                  <Code className="w-3.5 h-3.5" />
+                  <span>Paste HTML Code</span>
+                </button>
+              </div>
+            )}
+
+            {tool.id === 'html-to-pdf' && htmlInputMode === 'code' ? (
+              <div className="space-y-2">
+                <textarea
+                  rows="9"
+                  value={rawHtmlCode}
+                  onChange={(e) => setRawHtmlCode(e.target.value)}
+                  placeholder="<!DOCTYPE html>&#10;<html>&#10;  <head><style>h1 { color: #d97706; }</style></head>&#10;  <body>&#10;    <h1>Hello World</h1>&#10;    <p>This will be rendered cleanly to PDF.</p>&#10;  </body>&#10;</html>"
+                  className="w-full font-mono text-xs p-3.5 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+                />
+              </div>
+            ) : files.length === 0 && imageCards.length === 0 ? (
               <div
                 onDragOver={(e) => e.preventDefault()}
                 onDrop={handleDrop}
@@ -523,6 +574,8 @@ export default function ToolModal({ tool, onClose }) {
                       ? 'Supports .docx and .doc files'
                       : tool.id === 'powerpoint-to-pdf'
                       ? 'Supports .pptx and .ppt presentations'
+                      : tool.id === 'html-to-pdf'
+                      ? 'Supports .html and .htm files'
                       : 'Upload your document'}
                   </p>
                 </label>
@@ -877,7 +930,7 @@ export default function ToolModal({ tool, onClose }) {
             )}
 
             {/* Standard Multi-File Workspace for Other Tools */}
-            {!isPageLevelTool && tool.id !== 'compress' && tool.id !== 'jpg-to-pdf' && files.length > 0 && (
+            {!isPageLevelTool && tool.id !== 'compress' && tool.id !== 'jpg-to-pdf' && (tool.id !== 'html-to-pdf' || htmlInputMode === 'file') && files.length > 0 && (
               <div className="mt-4 space-y-2">
                 <div className="flex items-center justify-between text-xs font-semibold text-slate-500 px-1">
                   <span>Selected Files ({files.length})</span>
@@ -957,7 +1010,9 @@ export default function ToolModal({ tool, onClose }) {
               onClick={executeAction}
               disabled={
                 (tool.id === 'jpg-to-pdf' && imageCards.length === 0) ||
-                (tool.id !== 'jpg-to-pdf' && files.length === 0) ||
+                (tool.id === 'html-to-pdf' && htmlInputMode === 'code' && !rawHtmlCode.trim()) ||
+                (tool.id === 'html-to-pdf' && htmlInputMode === 'file' && files.length === 0) ||
+                (!['jpg-to-pdf', 'html-to-pdf'].includes(tool.id) && files.length === 0) ||
                 lockedFileNames.length > 0 ||
                 (tool.id === 'merge' && files.length < 2) ||
                 ((tool.id === 'remove' || tool.id === 'extract') && selectedPages.size === 0) ||
@@ -973,19 +1028,23 @@ export default function ToolModal({ tool, onClose }) {
                   ? 'bg-yellow-600 hover:bg-yellow-700 shadow-yellow-600/20'
                   : tool.id === 'powerpoint-to-pdf'
                   ? 'bg-orange-600 hover:bg-orange-700 shadow-orange-600/20'
+                  : tool.id === 'html-to-pdf'
+                  ? 'bg-amber-600 hover:bg-amber-700 shadow-amber-600/20'
                   : 'bg-rose-500 hover:bg-rose-600 shadow-rose-500/20'
               }`}
             >
               {isProcessing ? (
                 <span className="text-sm">
-                  {tool.id === 'word-to-pdf' || tool.id === 'powerpoint-to-pdf'
-                    ? 'Converting your file...'
+                  {['word-to-pdf', 'powerpoint-to-pdf', 'html-to-pdf'].includes(tool.id)
+                    ? 'Converting via LibreOffice...'
                     : 'Processing in browser...'}
                 </span>
               ) : (
                 <>
                   <span className="text-sm">
-                    {tool.id === 'powerpoint-to-pdf'
+                    {tool.id === 'html-to-pdf'
+                      ? 'Convert HTML to PDF'
+                      : tool.id === 'powerpoint-to-pdf'
                       ? 'Convert POWERPOINT to PDF'
                       : tool.id === 'word-to-pdf'
                       ? 'Convert WORD to PDF'
@@ -1020,6 +1079,8 @@ export default function ToolModal({ tool, onClose }) {
                 ? 'Word Document Converted to PDF!'
                 : tool.id === 'powerpoint-to-pdf'
                 ? 'Presentation Converted to PDF!'
+                : tool.id === 'html-to-pdf'
+                ? 'HTML Converted to PDF!'
                 : 'Processing Complete!'}
             </h4>
 

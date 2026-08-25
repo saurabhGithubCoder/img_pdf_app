@@ -694,3 +694,42 @@ export async function convertPowerpointToPDF(file) {
     compressedSize: pdfBlob.size,
   };
 }
+
+/**
+ * Convert HTML file or HTML string to PDF using LibreOffice.
+ * @param {File|string} input - HTML File object or raw HTML string
+ */
+export async function convertHtmlToPDF(input) {
+  let response;
+
+  if (typeof input === 'string') {
+    response = await fetch('/api/convert/html-to-pdf', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ html: input }),
+    });
+  } else {
+    const formData = new FormData();
+    formData.append('file', input);
+
+    response = await fetch('/api/convert/html-to-pdf', {
+      method: 'POST',
+      body: formData,
+    });
+  }
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.error || 'Server failed to convert HTML to PDF.');
+  }
+
+  const pdfBlob = await response.blob();
+  const baseName = typeof input === 'string' ? 'document' : input.name.replace(/\.[^/.]+$/, '');
+
+  return {
+    blob: pdfBlob,
+    filename: `${baseName}.pdf`,
+    originalSize: typeof input === 'string' ? new Blob([input]).size : input.size,
+    compressedSize: pdfBlob.size,
+  };
+}

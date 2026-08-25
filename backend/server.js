@@ -78,6 +78,32 @@ app.post('/api/convert/powerpoint-to-pdf', upload.single('file'), async (req, re
   }
 });
 
+app.post('/api/convert/html-to-pdf', upload.single('file'), async (req, res) => {
+  try {
+    let htmlBuffer;
+
+    if (req.file) {
+      htmlBuffer = req.file.buffer;
+    } else if (req.body && req.body.html) {
+      htmlBuffer = Buffer.from(req.body.html, 'utf-8');
+    } else {
+      return res.status(400).json({ error: 'No HTML file or content provided.' });
+    }
+
+    const pdfBuffer = await libreConvert(htmlBuffer, '.pdf', undefined);
+    const originalName = req.file
+      ? req.file.originalname.replace(/\.[^/.]+$/, '')
+      : 'rendered_html';
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${originalName}.pdf"`);
+    return res.send(pdfBuffer);
+  } catch (error) {
+    console.error('HTML conversion failed:', error);
+    return res.status(500).json({ error: 'Failed to convert HTML to PDF with LibreOffice.' });
+  }
+});
+
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`Conversion server running on port ${PORT}`);
