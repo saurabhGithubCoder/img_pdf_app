@@ -733,3 +733,101 @@ export async function convertHtmlToPDF(input) {
     compressedSize: pdfBlob.size,
   };
 }
+
+/**
+ * Check if an Excel (.xlsx / .xls) file is password-protected or encrypted.
+ * @param {File} file - Excel file object
+ * @returns {Promise<boolean>}
+ */
+export async function checkExcelPassword(file) {
+  try {
+    const arrayBuffer = await file.arrayBuffer();
+    const bytes = new Uint8Array(arrayBuffer);
+
+    // 1. Check for legacy OLE Compound Document signature (Encrypted modern .xlsx files are wrapped in OLE packages)
+    const isOleContainer =
+      bytes[0] === 0xd0 &&
+      bytes[1] === 0xcf &&
+      bytes[2] === 0x11 &&
+      bytes[3] === 0xe0 &&
+      bytes[4] === 0xa1 &&
+      bytes[5] === 0xb1 &&
+      bytes[6] === 0x1a &&
+      bytes[7] === 0xe1;
+
+    if (isOleContainer) {
+      const headerText = new TextDecoder('latin1').decode(bytes.slice(0, 4096));
+      if (
+        headerText.includes('EncryptedPackage') ||
+        headerText.includes('EncryptionInfo') ||
+        headerText.includes('StrongEncryptionTransform')
+      ) {
+        return true;
+      }
+    }
+
+    // 2. Inspect ZIP-based OpenXML container using JSZip
+    try {
+      const zip = await JSZip.loadAsync(arrayBuffer);
+
+      // Check workbook-level protection in xl/workbook.xml
+      const workbookFile = zip.file('xl/workbook.xml');
+      if (workbookFile) {
+        const wbXml = await workbookFile.async('text');
+        if (wbXml.includes('workbookProtection') && (wbXml.includes('workbookPassword') || wbXml.includes('lockStructure="1"'))) {
+          return true;
+        }
+      }
+    } catch {
+      // If JSZip fails to parse a modern .xlsx container, it is either corrupt or password-protected
+      if (file.name.toLowerCase().endsWith('.xlsx')) {
+        return true;
+      }
+    }
+
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Convert XLSX / XLS to PDF using the LibreOffice backend service.
+ * @param {File} file - Excel spreadsheet file
+ */
+export async function convertExcelToPDF(file) {
+  const isLocked = await checkExcelPassword(file);
+  if (isLocked) {
+    const err = new Error(`Cannot process: "${file.name}" is password-protected or encrypted.`);
+    err.lockedFiles = [file.name];
+    throw err;
+  }
+
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const response = await fetch('/api/convert/excel-to-pdf', {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    if (errorData.isLocked) {
+      const err = new Error(`Cannot process: "${file.name}" is password-protected.`);
+      err.lockedFiles = [file.name];
+      throw err;
+    }
+    throw new Error(errorData.error || 'Server failed to convert Excel document.');
+  }
+
+  const pdfBlob = await response.blob();
+  const baseName = file.name.replace(/\.[^/.]+$/, '');
+
+  return {
+    blob: pdfBlob,
+    filename: `${baseName}.pdf`,
+    originalSize: file.size,
+    compressedSize: pdfBlob.size,
+  };
+}

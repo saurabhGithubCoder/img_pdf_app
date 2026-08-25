@@ -38,7 +38,9 @@ import {
   checkDocxPassword,
   convertPowerpointToPDF,
   checkPptxPassword,
-  convertHtmlToPDF
+  convertHtmlToPDF,
+  convertExcelToPDF,
+  checkExcelPassword
 } from '../utils/pdfWorker';
 
 export default function ToolModal({ tool, onClose }) {
@@ -77,6 +79,8 @@ export default function ToolModal({ tool, onClose }) {
       validateWordTarget(files[0]);
     } else if (tool.id === 'powerpoint-to-pdf' && files.length > 0) {
       validatePowerpointTarget(files[0]);
+    } else if (tool.id === 'excel-to-pdf' && files.length > 0) {
+      validateExcelTarget(files[0]);
     }
   }, [files, tool.id]);
 
@@ -104,6 +108,16 @@ export default function ToolModal({ tool, onClose }) {
     setErrorMsg('');
     setLockedFileNames([]);
     const isLocked = await checkPptxPassword(file);
+    if (isLocked) {
+      setLockedFileNames([file.name]);
+      setErrorMsg(`Cannot process: "${file.name}" is password-protected or encrypted.`);
+    }
+  };
+
+  const validateExcelTarget = async (file) => {
+    setErrorMsg('');
+    setLockedFileNames([]);
+    const isLocked = await checkExcelPassword(file);
     if (isLocked) {
       setLockedFileNames([file.name]);
       setErrorMsg(`Cannot process: "${file.name}" is password-protected or encrypted.`);
@@ -152,6 +166,7 @@ export default function ToolModal({ tool, onClose }) {
       tool.id === 'compress' ||
       tool.id === 'word-to-pdf' ||
       tool.id === 'powerpoint-to-pdf' ||
+      tool.id === 'excel-to-pdf' ||
       tool.id === 'html-to-pdf'
     ) {
       setFiles([newFiles[0]]);
@@ -364,6 +379,9 @@ export default function ToolModal({ tool, onClose }) {
       let output;
 
       switch (tool.id) {
+        case 'excel-to-pdf':
+          output = await convertExcelToPDF(files[0]);
+          break;
         case 'html-to-pdf':
           output = await convertHtmlToPDF(htmlInputMode === 'code' ? rawHtmlCode : files[0]);
           break;
@@ -446,6 +464,7 @@ export default function ToolModal({ tool, onClose }) {
     if (tool.id === 'jpg-to-pdf') return 'image/jpeg,image/png,image/webp';
     if (tool.id === 'word-to-pdf') return '.docx,.doc,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword';
     if (tool.id === 'powerpoint-to-pdf') return '.pptx,.ppt,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.ms-powerpoint';
+    if (tool.id === 'excel-to-pdf') return '.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel';
     if (tool.id === 'html-to-pdf') return '.html,.htm,text/html';
     return 'application/pdf';
   };
@@ -454,6 +473,7 @@ export default function ToolModal({ tool, onClose }) {
     if (tool.id === 'jpg-to-pdf') return 'images';
     if (tool.id === 'word-to-pdf') return 'Word documents (.docx)';
     if (tool.id === 'powerpoint-to-pdf') return 'PowerPoint presentations (.pptx)';
+    if (tool.id === 'excel-to-pdf') return 'Excel spreadsheets (.xlsx)';
     if (tool.id === 'html-to-pdf') return 'HTML files (.html)';
     return 'PDFs';
   };
@@ -477,7 +497,7 @@ export default function ToolModal({ tool, onClose }) {
           <div>
             <h3 className="text-lg font-bold text-slate-900">{tool.name}</h3>
             <p className="text-xs text-slate-500">
-              {['word-to-pdf', 'powerpoint-to-pdf', 'html-to-pdf'].includes(tool.id)
+              {['word-to-pdf', 'powerpoint-to-pdf', 'excel-to-pdf', 'html-to-pdf'].includes(tool.id)
                 ? 'LibreOffice Engine Workspace'
                 : 'Client-Side Secure Workspace'}
             </p>
@@ -574,6 +594,8 @@ export default function ToolModal({ tool, onClose }) {
                       ? 'Supports .docx and .doc files'
                       : tool.id === 'powerpoint-to-pdf'
                       ? 'Supports .pptx and .ppt presentations'
+                      : tool.id === 'excel-to-pdf'
+                      ? 'Supports .xlsx and .xls spreadsheets'
                       : tool.id === 'html-to-pdf'
                       ? 'Supports .html and .htm files'
                       : 'Upload your document'}
@@ -1028,6 +1050,8 @@ export default function ToolModal({ tool, onClose }) {
                   ? 'bg-yellow-600 hover:bg-yellow-700 shadow-yellow-600/20'
                   : tool.id === 'powerpoint-to-pdf'
                   ? 'bg-orange-600 hover:bg-orange-700 shadow-orange-600/20'
+                  : tool.id === 'excel-to-pdf'
+                  ? 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/20'
                   : tool.id === 'html-to-pdf'
                   ? 'bg-amber-600 hover:bg-amber-700 shadow-amber-600/20'
                   : 'bg-rose-500 hover:bg-rose-600 shadow-rose-500/20'
@@ -1035,14 +1059,16 @@ export default function ToolModal({ tool, onClose }) {
             >
               {isProcessing ? (
                 <span className="text-sm">
-                  {['word-to-pdf', 'powerpoint-to-pdf', 'html-to-pdf'].includes(tool.id)
+                  {['word-to-pdf', 'powerpoint-to-pdf', 'excel-to-pdf', 'html-to-pdf'].includes(tool.id)
                     ? 'Converting via LibreOffice...'
                     : 'Processing in browser...'}
                 </span>
               ) : (
                 <>
                   <span className="text-sm">
-                    {tool.id === 'html-to-pdf'
+                    {tool.id === 'excel-to-pdf'
+                      ? 'Convert EXCEL to PDF'
+                      : tool.id === 'html-to-pdf'
                       ? 'Convert HTML to PDF'
                       : tool.id === 'powerpoint-to-pdf'
                       ? 'Convert POWERPOINT to PDF'
@@ -1079,6 +1105,8 @@ export default function ToolModal({ tool, onClose }) {
                 ? 'Word Document Converted to PDF!'
                 : tool.id === 'powerpoint-to-pdf'
                 ? 'Presentation Converted to PDF!'
+                : tool.id === 'excel-to-pdf'
+                ? 'Excel Spreadsheet Converted to PDF!'
                 : tool.id === 'html-to-pdf'
                 ? 'HTML Converted to PDF!'
                 : 'Processing Complete!'}

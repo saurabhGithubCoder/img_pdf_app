@@ -104,6 +104,43 @@ app.post('/api/convert/html-to-pdf', upload.single('file'), async (req, res) => 
   }
 });
 
+// 4. Excel to PDF
+app.post('/api/convert/excel-to-pdf', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded.' });
+    }
+
+    const buffer = req.file.buffer;
+
+    // Check for OLE EncryptedPackage header
+    const isOle = buffer[0] === 0xd0 && buffer[1] === 0xcf && buffer[2] === 0x11 && buffer[3] === 0xe0;
+    if (isOle) {
+      const headerText = buffer.slice(0, 4096).toString('binary');
+      if (
+        headerText.includes('EncryptedPackage') ||
+        headerText.includes('EncryptionInfo') ||
+        headerText.includes('Workbook')
+      ) {
+        return res.status(400).json({
+          error: `"${req.file.originalname}" is password-protected and cannot be converted.`,
+          isLocked: true,
+        });
+      }
+    }
+
+    const pdfBuffer = await libreConvert(buffer, '.pdf', undefined);
+    const originalName = req.file.originalname.replace(/\.[^/.]+$/, '');
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${originalName}.pdf"`);
+    return res.send(pdfBuffer);
+  } catch (error) {
+    console.error('Excel conversion error:', error);
+    return res.status(500).json({ error: 'Failed to convert Excel spreadsheet with LibreOffice.' });
+  }
+});
+
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`Conversion server running on port ${PORT}`);
