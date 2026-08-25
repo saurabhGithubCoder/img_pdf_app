@@ -487,3 +487,210 @@ export async function pdfToMarkdown(file) {
     filename: `${file.name.replace(/\.[^/.]+$/, '')}.md`
   };
 }
+
+/**
+ * Check if a Word (.docx / .doc) file is password-protected or encrypted.
+ * @param {File} file - Word file object
+ * @returns {Promise<boolean>}
+ */
+export async function checkDocxPassword(file) {
+  try {
+    const arrayBuffer = await file.arrayBuffer();
+    const bytes = new Uint8Array(arrayBuffer);
+
+    // 1. Check for legacy OLE Compound Document signature (D0 CF 11 E0 A1 B1 1A E1)
+    // Encrypted modern .docx files (Office OpenXML Agile Encryption) are wrapped in OLE packages
+    const isOleContainer =
+      bytes[0] === 0xd0 &&
+      bytes[1] === 0xcf &&
+      bytes[2] === 0x11 &&
+      bytes[3] === 0xe0 &&
+      bytes[4] === 0xa1 &&
+      bytes[5] === 0xb1 &&
+      bytes[6] === 0x1a &&
+      bytes[7] === 0xe1;
+
+    if (isOleContainer) {
+      // Decode partial string header to check for standard encryption streams
+      const headerText = new TextDecoder('latin1').decode(bytes.slice(0, 4096));
+      if (
+        headerText.includes('EncryptedPackage') ||
+        headerText.includes('EncryptionInfo') ||
+        headerText.includes('StrongEncryptionTransform')
+      ) {
+        return true;
+      }
+    }
+
+    // 2. Inspect ZIP-based OpenXML container using JSZip
+    try {
+      const zip = await JSZip.loadAsync(arrayBuffer);
+
+      // Check for Document Protection elements in settings.xml
+      const settingsFile = zip.file('word/settings.xml');
+      if (settingsFile) {
+        const settingsXml = await settingsFile.async('text');
+        if (
+          settingsXml.includes('w:documentProtection') &&
+          (settingsXml.includes('w:enforcement="1"') || settingsXml.includes('w:enforcement="true"'))
+        ) {
+          if (settingsXml.includes('w:cryptAlgorithmClass') || settingsXml.includes('w:hash')) {
+            return true;
+          }
+        }
+      }
+    } catch {
+      // If JSZip fails to read a modern .docx container, it is either corrupt or fully encrypted
+      if (file.name.toLowerCase().endsWith('.docx')) {
+        return true;
+      }
+    }
+
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Convert DOCX / DOC to PDF using the LibreOffice backend service.
+ * @param {File} file - Word document file
+ */
+export async function convertWordToPDF(file) {
+  const isLocked = await checkDocxPassword(file);
+  if (isLocked) {
+    const err = new Error(`Cannot process: "${file.name}" is password-protected or encrypted.`);
+    err.lockedFiles = [file.name];
+    throw err;
+  }
+
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const response = await fetch('/api/convert/word-to-pdf', {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    if (errorData.isLocked) {
+      const err = new Error(`Cannot process: "${file.name}" is password-protected.`);
+      err.lockedFiles = [file.name];
+      throw err;
+    }
+    throw new Error(errorData.error || 'Server failed to convert Word document.');
+  }
+
+  const pdfBlob = await response.blob();
+  const baseName = file.name.replace(/\.[^/.]+$/, '');
+
+  return {
+    blob: pdfBlob,
+    filename: `${baseName}.pdf`,
+    originalSize: file.size,
+    compressedSize: pdfBlob.size,
+  };
+}
+
+/**
+ * Check if a PowerPoint (.pptx / .ppt) file is password-protected or encrypted.
+ * @param {File} file - Presentation file object
+ * @returns {Promise<boolean>}
+ */
+export async function checkPptxPassword(file) {
+  try {
+    const arrayBuffer = await file.arrayBuffer();
+    const bytes = new Uint8Array(arrayBuffer);
+
+    // 1. Check for legacy OLE Compound Document signature (Encrypted modern .pptx files are wrapped in OLE packages)
+    const isOleContainer =
+      bytes[0] === 0xd0 &&
+      bytes[1] === 0xcf &&
+      bytes[2] === 0x11 &&
+      bytes[3] === 0xe0 &&
+      bytes[4] === 0xa1 &&
+      bytes[5] === 0xb1 &&
+      bytes[6] === 0x1a &&
+      bytes[7] === 0xe1;
+
+    if (isOleContainer) {
+      const headerText = new TextDecoder('latin1').decode(bytes.slice(0, 4096));
+      if (
+        headerText.includes('EncryptedPackage') ||
+        headerText.includes('EncryptionInfo') ||
+        headerText.includes('StrongEncryptionTransform')
+      ) {
+        return true;
+      }
+    }
+
+    // 2. Inspect ZIP-based OpenXML container using JSZip
+    try {
+      const zip = await JSZip.loadAsync(arrayBuffer);
+
+      // Check presentation-level protection settings
+      const presPropsFile = zip.file('ppt/presProps.xml');
+      if (presPropsFile) {
+        const presPropsXml = await presPropsFile.async('text');
+        if (
+          presPropsXml.includes('p:modifyVerifier') ||
+          presPropsXml.includes('p:cryptAlgorithmClass') ||
+          presPropsXml.includes('password=')
+        ) {
+          return true;
+        }
+      }
+    } catch {
+      // If JSZip fails to read a modern .pptx container, it is either corrupt or password-protected
+      if (file.name.toLowerCase().endsWith('.pptx')) {
+        return true;
+      }
+    }
+
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Convert PPTX / PPT to PDF using the LibreOffice backend service.
+ * @param {File} file - Presentation document file
+ */
+export async function convertPowerpointToPDF(file) {
+  const isLocked = await checkPptxPassword(file);
+  if (isLocked) {
+    const err = new Error(`Cannot process: "${file.name}" is password-protected or encrypted.`);
+    err.lockedFiles = [file.name];
+    throw err;
+  }
+
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const response = await fetch('/api/convert/powerpoint-to-pdf', {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    if (errorData.isLocked) {
+      const err = new Error(`Cannot process: "${file.name}" is password-protected.`);
+      err.lockedFiles = [file.name];
+      throw err;
+    }
+    throw new Error(errorData.error || 'Server failed to convert presentation.');
+  }
+
+  const pdfBlob = await response.blob();
+  const baseName = file.name.replace(/\.[^/.]+$/, '');
+
+  return {
+    blob: pdfBlob,
+    filename: `${baseName}.pdf`,
+    originalSize: file.size,
+    compressedSize: pdfBlob.size,
+  };
+}

@@ -32,7 +32,11 @@ import {
   extractPagesFromPDF,
   reorganizePDF,
   compressPDF,
-  checkPdfPassword
+  checkPdfPassword,
+  convertWordToPDF,
+  checkDocxPassword,
+  convertPowerpointToPDF,
+  checkPptxPassword
 } from '../utils/pdfWorker';
 
 export default function ToolModal({ tool, onClose }) {
@@ -63,6 +67,10 @@ export default function ToolModal({ tool, onClose }) {
       loadDocumentThumbnails(files[0]);
     } else if (tool.id === 'compress' && files.length > 0) {
       validateCompressTarget(files[0]);
+    } else if (tool.id === 'word-to-pdf' && files.length > 0) {
+      validateWordTarget(files[0]);
+    } else if (tool.id === 'powerpoint-to-pdf' && files.length > 0) {
+      validatePowerpointTarget(files[0]);
     }
   }, [files, tool.id]);
 
@@ -70,6 +78,26 @@ export default function ToolModal({ tool, onClose }) {
     setErrorMsg('');
     setLockedFileNames([]);
     const isLocked = await checkPdfPassword(file);
+    if (isLocked) {
+      setLockedFileNames([file.name]);
+      setErrorMsg(`Cannot process: "${file.name}" is password-protected or encrypted.`);
+    }
+  };
+
+  const validateWordTarget = async (file) => {
+    setErrorMsg('');
+    setLockedFileNames([]);
+    const isLocked = await checkDocxPassword(file);
+    if (isLocked) {
+      setLockedFileNames([file.name]);
+      setErrorMsg(`Cannot process: "${file.name}" is password-protected or encrypted.`);
+    }
+  };
+
+  const validatePowerpointTarget = async (file) => {
+    setErrorMsg('');
+    setLockedFileNames([]);
+    const isLocked = await checkPptxPassword(file);
     if (isLocked) {
       setLockedFileNames([file.name]);
       setErrorMsg(`Cannot process: "${file.name}" is password-protected or encrypted.`);
@@ -113,7 +141,12 @@ export default function ToolModal({ tool, onClose }) {
       }));
       setImageCards((prev) => [...prev, ...addedList]);
       setFiles((prev) => [...prev, ...Array.from(newFiles)]);
-    } else if (isPageLevelTool || tool.id === 'compress') {
+    } else if (
+      isPageLevelTool ||
+      tool.id === 'compress' ||
+      tool.id === 'word-to-pdf' ||
+      tool.id === 'powerpoint-to-pdf'
+    ) {
       setFiles([newFiles[0]]);
     } else {
       setFiles((prev) => [...prev, ...Array.from(newFiles)]);
@@ -321,6 +354,12 @@ export default function ToolModal({ tool, onClose }) {
       let output;
 
       switch (tool.id) {
+        case 'powerpoint-to-pdf':
+          output = await convertPowerpointToPDF(files[0]);
+          break;
+        case 'word-to-pdf':
+          output = await convertWordToPDF(files[0]);
+          break;
         case 'jpg-to-pdf':
           output = await imagesToPDF(imageCards);
           break;
@@ -390,6 +429,20 @@ export default function ToolModal({ tool, onClose }) {
     return `${(bytes / (k * k)).toFixed(2)} MB`;
   };
 
+  const getFileInputAccept = () => {
+    if (tool.id === 'jpg-to-pdf') return 'image/jpeg,image/png,image/webp';
+    if (tool.id === 'word-to-pdf') return '.docx,.doc,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword';
+    if (tool.id === 'powerpoint-to-pdf') return '.pptx,.ppt,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.ms-powerpoint';
+    return 'application/pdf';
+  };
+
+  const getUploadFileLabel = () => {
+    if (tool.id === 'jpg-to-pdf') return 'images';
+    if (tool.id === 'word-to-pdf') return 'Word documents (.docx)';
+    if (tool.id === 'powerpoint-to-pdf') return 'PowerPoint presentations (.pptx)';
+    return 'PDFs';
+  };
+
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
       <div className={`bg-white rounded-3xl w-full p-6 sm:p-8 shadow-2xl border border-slate-100 relative animate-in fade-in zoom-in-95 duration-150 ${
@@ -408,7 +461,11 @@ export default function ToolModal({ tool, onClose }) {
           </div>
           <div>
             <h3 className="text-lg font-bold text-slate-900">{tool.name}</h3>
-            <p className="text-xs text-slate-500">Client-Side Secure Workspace</p>
+            <p className="text-xs text-slate-500">
+              {tool.id === 'word-to-pdf' || tool.id === 'powerpoint-to-pdf'
+                ? 'LibreOffice Engine Workspace'
+                : 'Client-Side Secure Workspace'}
+            </p>
           </div>
         </div>
 
@@ -450,17 +507,23 @@ export default function ToolModal({ tool, onClose }) {
                   type="file"
                   id="fileInput"
                   multiple={tool.id === 'merge' || tool.id === 'jpg-to-pdf'}
-                  accept={tool.id === 'jpg-to-pdf' ? 'image/jpeg,image/png,image/webp' : 'application/pdf'}
+                  accept={getFileInputAccept()}
                   className="hidden"
                   onChange={(e) => handleFilesAdded(e.target.files)}
                 />
                 <label htmlFor="fileInput" className="cursor-pointer space-y-1 block">
                   <UploadCloud className="w-10 h-10 text-slate-400 mx-auto" />
                   <p className="text-sm font-medium text-slate-700">
-                    Drop {tool.id === 'jpg-to-pdf' ? 'images' : 'PDFs'} here or <span className="text-rose-500">browse</span>
+                    Drop {getUploadFileLabel()} here or <span className="text-rose-500">browse</span>
                   </p>
                   <p className="text-xs text-slate-400">
-                    {tool.id === 'jpg-to-pdf' ? 'Supports JPG, PNG, and WebP images' : 'Upload your document'}
+                    {tool.id === 'jpg-to-pdf'
+                      ? 'Supports JPG, PNG, and WebP images'
+                      : tool.id === 'word-to-pdf'
+                      ? 'Supports .docx and .doc files'
+                      : tool.id === 'powerpoint-to-pdf'
+                      ? 'Supports .pptx and .ppt presentations'
+                      : 'Upload your document'}
                   </p>
                 </label>
               </div>
@@ -516,7 +579,7 @@ export default function ToolModal({ tool, onClose }) {
                         />
                       </div>
 
-                      {/* Top Action Overlay (Rotate & Delete) */}
+                      {/* Top Action Overlay */}
                       <div className="absolute top-1.5 right-1.5 flex items-center space-x-1 opacity-90 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
                         <button
                           type="button"
@@ -908,15 +971,25 @@ export default function ToolModal({ tool, onClose }) {
                   ? 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/20'
                   : tool.id === 'jpg-to-pdf'
                   ? 'bg-yellow-600 hover:bg-yellow-700 shadow-yellow-600/20'
+                  : tool.id === 'powerpoint-to-pdf'
+                  ? 'bg-orange-600 hover:bg-orange-700 shadow-orange-600/20'
                   : 'bg-rose-500 hover:bg-rose-600 shadow-rose-500/20'
               }`}
             >
               {isProcessing ? (
-                <span className="text-sm">Processing in browser...</span>
+                <span className="text-sm">
+                  {tool.id === 'word-to-pdf' || tool.id === 'powerpoint-to-pdf'
+                    ? 'Converting your file...'
+                    : 'Processing in browser...'}
+                </span>
               ) : (
                 <>
                   <span className="text-sm">
-                    {tool.id === 'jpg-to-pdf'
+                    {tool.id === 'powerpoint-to-pdf'
+                      ? 'Convert POWERPOINT to PDF'
+                      : tool.id === 'word-to-pdf'
+                      ? 'Convert WORD to PDF'
+                      : tool.id === 'jpg-to-pdf'
                       ? `Convert ${imageCards.length} ${imageCards.length === 1 ? 'Image' : 'Images'} to PDF`
                       : tool.id === 'compress'
                       ? `Compress PDF (~${compressionPercent}%)`
@@ -943,6 +1016,10 @@ export default function ToolModal({ tool, onClose }) {
                 ? 'Compression Complete!'
                 : tool.id === 'jpg-to-pdf'
                 ? 'Images Converted to PDF!'
+                : tool.id === 'word-to-pdf'
+                ? 'Word Document Converted to PDF!'
+                : tool.id === 'powerpoint-to-pdf'
+                ? 'Presentation Converted to PDF!'
                 : 'Processing Complete!'}
             </h4>
 
