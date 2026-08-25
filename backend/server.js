@@ -12,7 +12,17 @@ const libreConvert = util.promisify(libre.convert);
 const app = express();
 const upload = multer({ storage: multer.memoryStorage() });
 
-app.use(cors());
+//cors for local 
+//app.use(cors());
+
+//cors for production 
+app.use(cors({
+  origin: '*', // Or specify: ['https://your-app.vercel.app', 'https://<username>.github.io']
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type'],
+  exposedHeaders: ['x-original-size', 'x-compressed-size', 'Content-Disposition']
+}));
+
 app.use(express.json());
 
 app.post('/api/convert/word-to-pdf', upload.single('file'), async (req, res) => {
