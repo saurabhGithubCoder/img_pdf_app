@@ -1,7 +1,11 @@
 FROM node:20-slim
 
-# Install system dependencies: LibreOffice, Ghostscript, Python3, and fonts
+# Install system dependencies, bzip2, build tools, Python, LibreOffice, and Ghostscript
 RUN apt-get update && apt-get install -y \
+    bzip2 \
+    tar \
+    curl \
+    build-essential \
     libreoffice \
     libreoffice-writer \
     libreoffice-calc \
