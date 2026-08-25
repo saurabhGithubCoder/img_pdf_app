@@ -2,6 +2,8 @@ import { PDFDocument, degrees } from 'pdf-lib';
 import * as pdfjsLib from 'pdfjs-dist';
 import JSZip from 'jszip';
 
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
+
 // Configure pdfjs worker
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
 
@@ -47,7 +49,8 @@ export async function compressPDF(file, compressionLevel = 45) {
   formData.append('file', file);
   formData.append('compressionPercent', compressionLevel.toString());
 
-  const response = await fetch('/api/compress-pdf', {
+  //const response = await fetch('/api/compress-pdf', {
+  const response = await fetch(`${API_BASE_URL}/api/compress-pdf`, {
     method: 'POST',
     body: formData,
   });
@@ -522,7 +525,8 @@ export async function convertWordToPDF(file) {
   const formData = new FormData();
   formData.append('file', file);
 
-  const response = await fetch('/api/convert/word-to-pdf', {
+  //const response = await fetch('/api/convert/word-to-pdf', {
+  const response = await fetch(`${API_BASE_URL}/api/convert/word-to-pdf`, {
     method: 'POST',
     body: formData,
   });
@@ -624,7 +628,8 @@ export async function convertPowerpointToPDF(file) {
   const formData = new FormData();
   formData.append('file', file);
 
-  const response = await fetch('/api/convert/powerpoint-to-pdf', {
+  //const response = await fetch('/api/convert/powerpoint-to-pdf', {
+  const response = await fetch(`${API_BASE_URL}/api/convert/powerpoint-to-pdf`, {
     method: 'POST',
     body: formData,
   });
@@ -658,7 +663,8 @@ export async function convertHtmlToPDF(input) {
   let response;
 
   if (typeof input === 'string') {
-    response = await fetch('/api/convert/html-to-pdf', {
+    //response = await fetch('/api/convert/html-to-pdf', {
+    response = await fetch(`${API_BASE_URL}/api/convert/html-to-pdf`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ html: input }),
@@ -667,7 +673,8 @@ export async function convertHtmlToPDF(input) {
     const formData = new FormData();
     formData.append('file', input);
 
-    response = await fetch('/api/convert/html-to-pdf', {
+    //response = await fetch('/api/convert/html-to-pdf', {
+    response = await fetch(`${API_BASE_URL}/api/convert/html-to-pdf`, {
       method: 'POST',
       body: formData,
     });
@@ -761,7 +768,8 @@ export async function convertExcelToPDF(file) {
   const formData = new FormData();
   formData.append('file', file);
 
-  const response = await fetch('/api/convert/excel-to-pdf', {
+  //const response = await fetch('/api/convert/excel-to-pdf', {
+  const response = await fetch(`${API_BASE_URL}/api/convert/excel-to-pdf`, {
     method: 'POST',
     body: formData,
   });
