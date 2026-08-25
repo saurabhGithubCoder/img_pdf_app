@@ -31,6 +31,93 @@ export async function checkPdfPassword(file) {
 }
 
 /**
+ * Genuine client-side PDF compression.
+ * Scales document raster DPI and recompresses image streams to achieve actual size reduction.
+ * * @param {File} file - Original PDF file
+ * @param {number} compressionLevel - Target reduction slider (10 to 90)
+ */
+export async function compressPDF(file, compressionLevel = 45) {
+  const isLocked = await checkPdfPassword(file);
+  if (isLocked) {
+    const err = new Error(`"${file.name}" is password-protected and cannot be processed.`);
+    err.lockedFiles = [file.name];
+    throw err;
+  }
+
+  const arrayBuffer = await file.arrayBuffer();
+  const pdfjsDoc = await pdfjsLib.getDocument({ data: arrayBuffer.slice(0) }).promise;
+  const numPages = pdfjsDoc.numPages;
+
+  // Map compression slider percentage to rendering scale & quality
+  // Standard A4 is 595 x 842 points. 
+  // Scale 1.0 = ~72 DPI (Standard Web/Doc quality)
+  // Scale 1.25 = ~90 DPI (Crisp Text)
+  // Scale 0.85 = ~60 DPI (Maximum Compression)
+  const ratio = Math.min(Math.max(compressionLevel / 100, 0.1), 0.9);
+  
+  // Dynamic scale factor: from 1.25 (at 10%) down to 0.75 (at 90%)
+  const renderScale = 1.30 - (ratio * 0.55);
+  
+  // Dynamic JPEG quality: from 0.80 (at 10%) down to 0.30 (at 90%)
+  const jpegQuality = 0.82 - (ratio * 0.52);
+
+  const compressedPdf = await PDFDocument.create();
+
+  for (let pageNum = 1; pageNum <= numPages; pageNum++) {
+    const page = await pdfjsDoc.getPage(pageNum);
+    const unscaledViewport = page.getViewport({ scale: 1.0 });
+    const targetViewport = page.getViewport({ scale: renderScale });
+
+    // Render page to an offscreen Canvas
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d', { alpha: false, willReadFrequently: false });
+    canvas.width = Math.floor(targetViewport.width);
+    canvas.height = Math.floor(targetViewport.height);
+
+    // Apply crisp solid white backdrop
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    await page.render({
+      canvasContext: ctx,
+      viewport: targetViewport,
+      intent: 'display'
+    }).promise;
+
+    // Encode rendered frame as compressed JPEG buffer
+    const jpegDataUrl = canvas.toDataURL('image/jpeg', jpegQuality);
+    const jpegBuffer = await fetch(jpegDataUrl).then((r) => r.arrayBuffer());
+
+    // Embed compressed frame into the output PDF
+    const embeddedImg = await compressedPdf.embedJpg(jpegBuffer);
+    
+    // Add page preserving exact original physical dimensions
+    const newPage = compressedPdf.addPage([unscaledViewport.width, unscaledViewport.height]);
+    newPage.drawImage(embeddedImg, {
+      x: 0,
+      y: 0,
+      width: unscaledViewport.width,
+      height: unscaledViewport.height,
+    });
+  }
+
+  // Strip metadata & save with object stream compression
+  const compressedBytes = await compressedPdf.save({
+    useObjectStreams: true,
+    addDefaultPage: false
+  });
+
+  const outputBlob = new Blob([compressedBytes], { type: 'application/pdf' });
+
+  return {
+    blob: outputBlob,
+    filename: `compressed_${file.name}`,
+    originalSize: file.size,
+    compressedSize: outputBlob.size,
+  };
+}
+
+/**
  * Render all page thumbnails of a PDF file into base64 image data URLs.
  */
 export async function renderPdfThumbnails(file) {
@@ -57,9 +144,9 @@ export async function renderPdfThumbnails(file) {
     await page.render({ canvasContext: ctx, viewport }).promise;
     thumbnails.push({
       id: `page-${i}-${Date.now()}-${Math.random()}`,
-      originalIndex: i - 1, // 0-based index in original PDF
+      originalIndex: i - 1,
       pageNumber: i,
-      rotation: 0,          // User rotation offset (0, 90, 180, 270)
+      rotation: 0,
       dataUrl: canvas.toDataURL('image/jpeg', 0.8)
     });
   }
@@ -86,7 +173,6 @@ export async function reorganizePDF(file, pageItems) {
   const originalPdf = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
   const newPdf = await PDFDocument.create();
 
-  // Extract pages based on current organized ordering
   const indices = pageItems.map((item) => item.originalIndex);
   const copiedPages = await newPdf.copyPages(originalPdf, indices);
 
@@ -293,14 +379,20 @@ export async function rotatePDF(file, angle = 90) {
 /**
  * Convert JPG/PNG Images into a single PDF.
  */
-export async function imagesToPDF(imageFileList) {
+/**
+ * Convert an ordered list of Image files or image items into a single PDF.
+ * @param {Array} imageItems - Array of image file objects or objects with { file, rotation }
+ */
+export async function imagesToPDF(imageItems) {
   const pdfDoc = await PDFDocument.create();
 
-  for (const imgFile of imageFileList) {
-    const imgBytes = await imgFile.arrayBuffer();
+  for (const item of imageItems) {
+    const file = item.file || item;
+    const customRotation = item.rotation || 0;
+    const imgBytes = await file.arrayBuffer();
     let embeddedImg;
 
-    if (imgFile.type.includes('png')) {
+    if (file.type.includes('png') || file.name.endsWith('.png')) {
       embeddedImg = await pdfDoc.embedPng(imgBytes);
     } else {
       embeddedImg = await pdfDoc.embedJpg(imgBytes);
@@ -308,6 +400,11 @@ export async function imagesToPDF(imageFileList) {
 
     if (embeddedImg) {
       const page = pdfDoc.addPage([embeddedImg.width, embeddedImg.height]);
+      
+      if (customRotation !== 0) {
+        page.setRotation(degrees(customRotation));
+      }
+
       page.drawImage(embeddedImg, {
         x: 0,
         y: 0,
@@ -317,7 +414,7 @@ export async function imagesToPDF(imageFileList) {
     }
   }
 
-  const bytes = await pdfDoc.save();
+  const bytes = await pdfDoc.save({ useObjectStreams: true });
   return {
     blob: new Blob([bytes], { type: 'application/pdf' }),
     filename: 'converted_images.pdf'

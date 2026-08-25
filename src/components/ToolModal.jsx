@@ -14,7 +14,11 @@ import {
   Loader2,
   Check,
   RotateCw,
-  GripVertical
+  GripVertical,
+  Sliders,
+  TrendingDown,
+  RotateCcw,
+  Image as ImageIcon
 } from 'lucide-react';
 import {
   mergePDFs,
@@ -26,7 +30,9 @@ import {
   renderPdfThumbnails,
   removePagesFromPDF,
   extractPagesFromPDF,
-  reorganizePDF
+  reorganizePDF,
+  compressPDF,
+  checkPdfPassword
 } from '../utils/pdfWorker';
 
 export default function ToolModal({ tool, onClose }) {
@@ -36,22 +42,39 @@ export default function ToolModal({ tool, onClose }) {
   const [errorMsg, setErrorMsg] = useState('');
   const [lockedFileNames, setLockedFileNames] = useState([]);
 
-  // Page-selector specific state (used by 'remove', 'extract', and 'organize')
+  // JPG to PDF State
+  const [imageCards, setImageCards] = useState([]); // [{ id, file, previewUrl, rotation }]
+  const [draggedImageIndex, setDraggedImageIndex] = useState(null);
+
+  // Compression tool settings
+  const [compressionPercent, setCompressionPercent] = useState(45);
+
+  // Page-selector specific state ('remove', 'extract', 'organize')
   const isPageLevelTool = tool.id === 'remove' || tool.id === 'extract' || tool.id === 'organize';
   const [thumbnails, setThumbnails] = useState([]);
   const [totalPages, setTotalPages] = useState(0);
   const [isRenderingPages, setIsRenderingPages] = useState(false);
   const [selectedPages, setSelectedPages] = useState(new Set());
   const [rangeInput, setRangeInput] = useState('');
-
-  // Drag-and-drop state for page reordering
   const [draggedPageIndex, setDraggedPageIndex] = useState(null);
 
   useEffect(() => {
     if (isPageLevelTool && files.length > 0) {
       loadDocumentThumbnails(files[0]);
+    } else if (tool.id === 'compress' && files.length > 0) {
+      validateCompressTarget(files[0]);
     }
   }, [files, tool.id]);
+
+  const validateCompressTarget = async (file) => {
+    setErrorMsg('');
+    setLockedFileNames([]);
+    const isLocked = await checkPdfPassword(file);
+    if (isLocked) {
+      setLockedFileNames([file.name]);
+      setErrorMsg(`Cannot process: "${file.name}" is password-protected or encrypted.`);
+    }
+  };
 
   const loadDocumentThumbnails = async (file) => {
     setErrorMsg('');
@@ -80,7 +103,17 @@ export default function ToolModal({ tool, onClose }) {
   const handleFilesAdded = (newFiles) => {
     setErrorMsg('');
     setLockedFileNames([]);
-    if (isPageLevelTool) {
+
+    if (tool.id === 'jpg-to-pdf') {
+      const addedList = Array.from(newFiles).map((file) => ({
+        id: `img-${Date.now()}-${Math.random()}`,
+        file,
+        previewUrl: URL.createObjectURL(file),
+        rotation: 0
+      }));
+      setImageCards((prev) => [...prev, ...addedList]);
+      setFiles((prev) => [...prev, ...Array.from(newFiles)]);
+    } else if (isPageLevelTool || tool.id === 'compress') {
       setFiles([newFiles[0]]);
     } else {
       setFiles((prev) => [...prev, ...Array.from(newFiles)]);
@@ -94,13 +127,48 @@ export default function ToolModal({ tool, onClose }) {
     }
   };
 
-  // Reordering handlers for Organize tool
+  // Image Reordering Handlers for JPG to PDF
+  const handleImageDragStart = (e, index) => {
+    setDraggedImageIndex(index);
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleImageDragOver = (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+  };
+
+  const handleImageDrop = (e, dropIndex) => {
+    e.preventDefault();
+    if (draggedImageIndex === null || draggedImageIndex === dropIndex) return;
+
+    const reordered = [...imageCards];
+    const [draggedItem] = reordered.splice(draggedImageIndex, 1);
+    reordered.splice(dropIndex, 0, draggedItem);
+
+    setImageCards(reordered);
+    setDraggedImageIndex(null);
+  };
+
+  const rotateImageCard = (index) => {
+    const updated = [...imageCards];
+    updated[index].rotation = (updated[index].rotation + 90) % 360;
+    setImageCards(updated);
+  };
+
+  const deleteImageCard = (index) => {
+    const updated = imageCards.filter((_, idx) => idx !== index);
+    setImageCards(updated);
+    setFiles(updated.map((c) => c.file));
+  };
+
+  // PDF Page Organizing Handlers
   const handlePageDragStart = (e, index) => {
     setDraggedPageIndex(index);
     e.dataTransfer.effectAllowed = 'move';
   };
 
-  const handlePageDragOver = (e, index) => {
+  const handlePageDragOver = (e) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
   };
@@ -117,14 +185,12 @@ export default function ToolModal({ tool, onClose }) {
     setDraggedPageIndex(null);
   };
 
-  // Rotate a single page by 90 degrees
   const rotateSinglePage = (index) => {
     const updated = [...thumbnails];
     updated[index].rotation = (updated[index].rotation + 90) % 360;
     setThumbnails(updated);
   };
 
-  // Delete a single page in Organize mode
   const deleteSinglePage = (index) => {
     if (thumbnails.length <= 1) {
       setErrorMsg('A PDF must contain at least one page.');
@@ -212,6 +278,14 @@ export default function ToolModal({ tool, onClose }) {
     }
   };
 
+  const handleGoBackToSettings = () => {
+    if (result?.url) {
+      URL.revokeObjectURL(result.url);
+    }
+    setResult(null);
+    setErrorMsg('');
+  };
+
   const executeAction = async () => {
     setErrorMsg('');
     setLockedFileNames([]);
@@ -221,7 +295,12 @@ export default function ToolModal({ tool, onClose }) {
       return;
     }
 
-    if (files.length === 0) {
+    if (tool.id === 'jpg-to-pdf' && imageCards.length === 0) {
+      setErrorMsg('Please upload at least 1 image file.');
+      return;
+    }
+
+    if (files.length === 0 && imageCards.length === 0) {
       setErrorMsg('Please select at least one file.');
       return;
     }
@@ -242,6 +321,12 @@ export default function ToolModal({ tool, onClose }) {
       let output;
 
       switch (tool.id) {
+        case 'jpg-to-pdf':
+          output = await imagesToPDF(imageCards);
+          break;
+        case 'compress':
+          output = await compressPDF(files[0], compressionPercent);
+          break;
         case 'organize':
           output = await reorganizePDF(files[0], thumbnails);
           break;
@@ -260,9 +345,6 @@ export default function ToolModal({ tool, onClose }) {
         case 'rotate':
           output = await rotatePDF(files[0]);
           break;
-        case 'jpg-to-pdf':
-          output = await imagesToPDF(files);
-          break;
         case 'pdf-to-jpg':
           output = await pdfToJpg(files[0]);
           break;
@@ -278,7 +360,12 @@ export default function ToolModal({ tool, onClose }) {
       }
 
       const url = URL.createObjectURL(output.blob);
-      setResult({ url, filename: output.filename });
+      setResult({
+        url,
+        filename: output.filename,
+        originalSize: output.originalSize,
+        compressedSize: output.compressedSize
+      });
     } catch (err) {
       console.error(err);
       if (err.lockedFiles && err.lockedFiles.length > 0) {
@@ -296,10 +383,17 @@ export default function ToolModal({ tool, onClose }) {
     }
   };
 
+  const formatFileSize = (bytes) => {
+    if (!bytes) return '0 KB';
+    const k = 1024;
+    if (bytes < k * k) return `${(bytes / k).toFixed(1)} KB`;
+    return `${(bytes / (k * k)).toFixed(2)} MB`;
+  };
+
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
       <div className={`bg-white rounded-3xl w-full p-6 sm:p-8 shadow-2xl border border-slate-100 relative animate-in fade-in zoom-in-95 duration-150 ${
-        isPageLevelTool && thumbnails.length > 0 ? 'max-w-4xl' : 'max-w-xl'
+        (isPageLevelTool && thumbnails.length > 0) || (tool.id === 'jpg-to-pdf' && imageCards.length > 0) ? 'max-w-4xl' : 'max-w-xl'
       }`}>
         <button
           onClick={onClose}
@@ -346,7 +440,7 @@ export default function ToolModal({ tool, onClose }) {
 
         {!result ? (
           <>
-            {files.length === 0 ? (
+            {files.length === 0 && imageCards.length === 0 ? (
               <div
                 onDragOver={(e) => e.preventDefault()}
                 onDrop={handleDrop}
@@ -356,22 +450,188 @@ export default function ToolModal({ tool, onClose }) {
                   type="file"
                   id="fileInput"
                   multiple={tool.id === 'merge' || tool.id === 'jpg-to-pdf'}
+                  accept={tool.id === 'jpg-to-pdf' ? 'image/jpeg,image/png,image/webp' : 'application/pdf'}
                   className="hidden"
                   onChange={(e) => handleFilesAdded(e.target.files)}
                 />
                 <label htmlFor="fileInput" className="cursor-pointer space-y-1 block">
                   <UploadCloud className="w-10 h-10 text-slate-400 mx-auto" />
                   <p className="text-sm font-medium text-slate-700">
-                    Drop PDF here or <span className="text-rose-500">browse</span>
+                    Drop {tool.id === 'jpg-to-pdf' ? 'images' : 'PDFs'} here or <span className="text-rose-500">browse</span>
                   </p>
                   <p className="text-xs text-slate-400">
-                    {isPageLevelTool ? 'Select 1 PDF document' : 'Upload your document'}
+                    {tool.id === 'jpg-to-pdf' ? 'Supports JPG, PNG, and WebP images' : 'Upload your document'}
                   </p>
                 </label>
               </div>
             ) : null}
 
-            {/* Custom Visual Workspace for "Organize PDF" Tool */}
+            {/* Custom Interactive Workspace for JPG to PDF */}
+            {tool.id === 'jpg-to-pdf' && imageCards.length > 0 && (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between p-3 bg-yellow-50/80 rounded-2xl border border-yellow-200 text-xs">
+                  <div className="flex items-center space-x-2">
+                    <ImageIcon className="w-4 h-4 text-yellow-600 shrink-0" />
+                    <span className="font-semibold text-yellow-950">
+                      {imageCards.length} {imageCards.length === 1 ? 'Image Selected' : 'Images Selected'}
+                    </span>
+                  </div>
+                  <label htmlFor="moreImagesInput" className="text-yellow-700 hover:text-yellow-800 font-semibold cursor-pointer">
+                    + Add More
+                    <input
+                      type="file"
+                      id="moreImagesInput"
+                      multiple
+                      accept="image/jpeg,image/png,image/webp"
+                      className="hidden"
+                      onChange={(e) => handleFilesAdded(e.target.files)}
+                    />
+                  </label>
+                </div>
+
+                <div className="text-xs text-slate-500 font-medium flex items-center justify-between">
+                  <span>Hold & drag images to rearrange conversion order.</span>
+                  <span>Order: Left to Right, Top to Bottom</span>
+                </div>
+
+                {/* Rearrangeable Images Grid */}
+                <div className="max-h-72 overflow-y-auto p-3 bg-slate-100/60 rounded-2xl border border-slate-200 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3.5">
+                  {imageCards.map((card, idx) => (
+                    <div
+                      key={card.id}
+                      draggable
+                      onDragStart={(e) => handleImageDragStart(e, idx)}
+                      onDragOver={handleImageDragOver}
+                      onDrop={(e) => handleImageDrop(e, idx)}
+                      className={`group relative rounded-xl border-2 bg-white shadow-sm overflow-hidden cursor-grab active:cursor-grabbing transition-all ${
+                        draggedImageIndex === idx ? 'opacity-40 scale-95 border-yellow-400' : 'border-slate-200 hover:border-yellow-400 hover:shadow-md'
+                      }`}
+                    >
+                      <div className="p-2 flex items-center justify-center min-h-[130px] bg-slate-50">
+                        <img
+                          src={card.previewUrl}
+                          alt={card.file.name}
+                          style={{ transform: `rotate(${card.rotation}deg)` }}
+                          className="max-h-28 object-contain transition-transform duration-200"
+                        />
+                      </div>
+
+                      {/* Top Action Overlay (Rotate & Delete) */}
+                      <div className="absolute top-1.5 right-1.5 flex items-center space-x-1 opacity-90 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+                        <button
+                          type="button"
+                          onClick={() => rotateImageCard(idx)}
+                          className="p-1.5 bg-white/90 hover:bg-white text-slate-700 rounded-lg shadow hover:text-yellow-600 transition"
+                          title="Rotate 90° Clockwise"
+                        >
+                          <RotateCw className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => deleteImageCard(idx)}
+                          className="p-1.5 bg-white/90 hover:bg-white text-slate-700 rounded-lg shadow hover:text-red-600 transition"
+                          title="Remove Image"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+
+                      {/* Card Footer */}
+                      <div className="px-2 py-1 bg-white border-t border-slate-100 flex items-center justify-between text-[10px] text-slate-500 font-semibold">
+                        <div className="flex items-center space-x-1 truncate max-w-[80px]">
+                          <GripVertical className="w-3 h-3 text-slate-400 shrink-0" />
+                          <span>Page {idx + 1}</span>
+                        </div>
+                        <span className="text-slate-400 truncate">{(card.file.size / 1024).toFixed(0)} KB</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Custom Workspace for "Compress PDF" */}
+            {tool.id === 'compress' && files.length > 0 && (
+              <div className="space-y-5">
+                <div className="flex items-center justify-between p-3.5 bg-slate-50 rounded-2xl border border-slate-200 text-xs">
+                  <div className="flex items-center space-x-2.5 truncate">
+                    <FileText className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span className="font-semibold text-slate-800 truncate">{files[0].name}</span>
+                    <span className="text-slate-400 font-medium">({formatFileSize(files[0].size)})</span>
+                  </div>
+                  <button
+                    onClick={() => removeFileItem(0)}
+                    className="text-rose-600 hover:text-rose-700 font-semibold"
+                  >
+                    Change
+                  </button>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                    Compression Quality Mode
+                  </label>
+                  <div className="grid grid-cols-3 gap-2.5">
+                    {[
+                      { percent: 25, label: 'Low', desc: 'Maximum Quality' },
+                      { percent: 45, label: 'Recommended', desc: 'Balanced Quality & Size', highlight: true },
+                      { percent: 75, label: 'High', desc: 'Smallest File Size' }
+                    ].map((preset) => {
+                      const isActive = compressionPercent === preset.percent;
+                      return (
+                        <button
+                          key={preset.percent}
+                          type="button"
+                          onClick={() => setCompressionPercent(preset.percent)}
+                          className={`p-3 rounded-2xl border text-left transition ${
+                            isActive
+                              ? 'border-emerald-500 bg-emerald-50/50 shadow-sm ring-2 ring-emerald-500/20'
+                              : 'border-slate-200 hover:border-slate-300 bg-white'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className={`text-xs font-bold ${isActive ? 'text-emerald-700' : 'text-slate-800'}`}>
+                              {preset.label}
+                            </span>
+                            <span className={`text-[10px] font-semibold ${isActive ? 'text-emerald-600' : 'text-slate-400'}`}>
+                              ~{preset.percent}%
+                            </span>
+                          </div>
+                          <p className="text-[10px] text-slate-500 mt-0.5 leading-tight">{preset.desc}</p>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="p-4 bg-slate-50/80 rounded-2xl border border-slate-200/80 space-y-2">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-semibold text-slate-700 flex items-center gap-1.5">
+                      <Sliders className="w-3.5 h-3.5 text-slate-500" />
+                      Target Compression Ratio
+                    </span>
+                    <span className="font-bold text-emerald-600 bg-emerald-100/60 px-2 py-0.5 rounded-full">
+                      {compressionPercent}%
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="10"
+                    max="90"
+                    step="5"
+                    value={compressionPercent}
+                    onChange={(e) => setCompressionPercent(Number(e.target.value))}
+                    className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-emerald-600"
+                  />
+                  <div className="flex justify-between text-[10px] text-slate-400 font-medium px-0.5">
+                    <span>10% (Ultra High Quality)</span>
+                    <span>90% (Maximum Compression)</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Custom Visual Workspace for "Organize PDF" */}
             {tool.id === 'organize' && files.length > 0 && (
               <div className="space-y-4">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 bg-slate-50 rounded-2xl border border-slate-200 text-xs">
@@ -393,7 +653,6 @@ export default function ToolModal({ tool, onClose }) {
                   <span>{thumbnails.length} Pages</span>
                 </div>
 
-                {/* Thumbnails Organizing Grid */}
                 {isRenderingPages ? (
                   <div className="py-12 text-center text-slate-400 space-y-2">
                     <Loader2 className="w-7 h-7 animate-spin mx-auto text-amber-500" />
@@ -406,13 +665,12 @@ export default function ToolModal({ tool, onClose }) {
                         key={thumb.id}
                         draggable
                         onDragStart={(e) => handlePageDragStart(e, idx)}
-                        onDragOver={(e) => handlePageDragOver(e, idx)}
+                        onDragOver={handlePageDragOver}
                         onDrop={(e) => handlePageDrop(e, idx)}
                         className={`group relative rounded-xl border-2 bg-white shadow-sm overflow-hidden cursor-grab active:cursor-grabbing transition-all ${
                           draggedPageIndex === idx ? 'opacity-40 scale-95 border-amber-400' : 'border-slate-200 hover:border-amber-400 hover:shadow-md'
                         }`}
                       >
-                        {/* Page Preview Container with custom rotation */}
                         <div className="p-2 flex items-center justify-center min-h-[140px] bg-slate-50">
                           <img
                             src={thumb.dataUrl}
@@ -422,7 +680,6 @@ export default function ToolModal({ tool, onClose }) {
                           />
                         </div>
 
-                        {/* Top Action Overlay (Rotate & Delete) */}
                         <div className="absolute top-1.5 right-1.5 flex items-center space-x-1 opacity-90 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
                           <button
                             type="button"
@@ -448,7 +705,6 @@ export default function ToolModal({ tool, onClose }) {
                           </button>
                         </div>
 
-                        {/* Bottom Index Badge */}
                         <div className="px-2 py-1 bg-white border-t border-slate-100 flex items-center justify-between text-[10px] text-slate-500 font-semibold">
                           <div className="flex items-center space-x-1">
                             <GripVertical className="w-3 h-3 text-slate-400" />
@@ -558,7 +814,7 @@ export default function ToolModal({ tool, onClose }) {
             )}
 
             {/* Standard Multi-File Workspace for Other Tools */}
-            {!isPageLevelTool && files.length > 0 && (
+            {!isPageLevelTool && tool.id !== 'compress' && tool.id !== 'jpg-to-pdf' && files.length > 0 && (
               <div className="mt-4 space-y-2">
                 <div className="flex items-center justify-between text-xs font-semibold text-slate-500 px-1">
                   <span>Selected Files ({files.length})</span>
@@ -637,7 +893,9 @@ export default function ToolModal({ tool, onClose }) {
             <button
               onClick={executeAction}
               disabled={
-                files.length === 0 ||
+                (tool.id === 'jpg-to-pdf' && imageCards.length === 0) ||
+                (tool.id !== 'jpg-to-pdf' && files.length === 0) ||
+                lockedFileNames.length > 0 ||
                 (tool.id === 'merge' && files.length < 2) ||
                 ((tool.id === 'remove' || tool.id === 'extract') && selectedPages.size === 0) ||
                 (tool.id === 'remove' && selectedPages.size >= totalPages) ||
@@ -645,14 +903,24 @@ export default function ToolModal({ tool, onClose }) {
                 isProcessing ||
                 isRenderingPages
               }
-              className="mt-6 w-full py-3.5 bg-rose-500 hover:bg-rose-600 disabled:opacity-50 text-white rounded-xl font-medium shadow-md shadow-rose-500/20 transition flex items-center justify-center space-x-2"
+              className={`mt-6 w-full py-3.5 text-white rounded-xl font-medium shadow-md transition flex items-center justify-center space-x-2 disabled:opacity-50 ${
+                tool.id === 'compress'
+                  ? 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/20'
+                  : tool.id === 'jpg-to-pdf'
+                  ? 'bg-yellow-600 hover:bg-yellow-700 shadow-yellow-600/20'
+                  : 'bg-rose-500 hover:bg-rose-600 shadow-rose-500/20'
+              }`}
             >
               {isProcessing ? (
-                <span className="text-sm">Saving organized document...</span>
+                <span className="text-sm">Processing in browser...</span>
               ) : (
                 <>
                   <span className="text-sm">
-                    {tool.id === 'organize'
+                    {tool.id === 'jpg-to-pdf'
+                      ? `Convert ${imageCards.length} ${imageCards.length === 1 ? 'Image' : 'Images'} to PDF`
+                      : tool.id === 'compress'
+                      ? `Compress PDF (~${compressionPercent}%)`
+                      : tool.id === 'organize'
                       ? `Save Organized PDF (${thumbnails.length} Pages)`
                       : tool.id === 'remove'
                       ? `Remove ${selectedPages.size} ${selectedPages.size === 1 ? 'Page' : 'Pages'}`
@@ -671,25 +939,62 @@ export default function ToolModal({ tool, onClose }) {
           <div className="text-center py-6 space-y-4">
             <CheckCircle2 className="w-12 h-12 text-emerald-500 mx-auto" />
             <h4 className="text-lg font-bold text-slate-900">
-              {tool.id === 'organize' ? 'PDF Organized Successfully!' : 'Processing Complete!'}
+              {tool.id === 'compress'
+                ? 'Compression Complete!'
+                : tool.id === 'jpg-to-pdf'
+                ? 'Images Converted to PDF!'
+                : 'Processing Complete!'}
             </h4>
+
+            {/* Compressed Stats Breakdown */}
+            {tool.id === 'compress' && result.originalSize && result.compressedSize && (
+              <div className="max-w-xs mx-auto p-3.5 bg-emerald-50/70 border border-emerald-200 rounded-2xl flex items-center justify-around text-xs">
+                <div>
+                  <p className="text-[10px] text-slate-400 font-semibold uppercase">Original</p>
+                  <p className="font-bold text-slate-700">{formatFileSize(result.originalSize)}</p>
+                </div>
+                <TrendingDown className="w-4 h-4 text-emerald-600" />
+                <div>
+                  <p className="text-[10px] text-slate-400 font-semibold uppercase">Compressed</p>
+                  <p className="font-bold text-emerald-700">{formatFileSize(result.compressedSize)}</p>
+                </div>
+                <div className="bg-emerald-600 text-white px-2 py-1 rounded-lg text-[10px] font-extrabold">
+                  -{Math.max(0, Math.round(((result.originalSize - result.compressedSize) / result.originalSize) * 100))}%
+                </div>
+              </div>
+            )}
+
             <p className="text-xs text-slate-500 truncate px-4">
               Generated: <span className="font-semibold text-slate-700">{result.filename}</span>
             </p>
-            <div className="flex gap-3 pt-2">
+
+            <div className="flex flex-col sm:flex-row gap-2.5 pt-2">
+              {tool.id === 'compress' && (
+                <button
+                  onClick={handleGoBackToSettings}
+                  className="flex-1 py-3 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 rounded-xl text-sm font-semibold transition flex items-center justify-center space-x-1.5 shadow-sm"
+                >
+                  <RotateCcw className="w-4 h-4 text-slate-500" />
+                  <span>Adjust Settings</span>
+                </button>
+              )}
+
               <button
                 onClick={onClose}
-                className="flex-1 py-3 border border-slate-200 rounded-xl text-sm font-medium text-slate-700 hover:bg-slate-50 transition"
+                className={`py-3 border border-slate-200 rounded-xl text-sm font-medium text-slate-700 hover:bg-slate-50 transition ${
+                  tool.id === 'compress' ? 'px-5' : 'flex-1'
+                }`}
               >
-                Close
+                Done
               </button>
+
               <a
                 href={result.url}
                 download={result.filename}
                 className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-medium shadow-md shadow-emerald-600/20 text-center flex items-center justify-center space-x-2 transition"
               >
                 <Download className="w-4 h-4" />
-                <span>Download Result</span>
+                <span>Download PDF</span>
               </a>
             </div>
           </div>
