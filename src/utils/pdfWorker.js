@@ -6,14 +6,160 @@ import JSZip from 'jszip';
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
 
 /**
- * Merge multiple PDF files into one.
+ * Check if a file is password protected using pdfjs & pdf-lib
+ */
+export async function checkPdfPassword(file) {
+  const arrayBuffer = await file.arrayBuffer();
+  try {
+    const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer.slice(0) });
+    await loadingTask.promise;
+  } catch (err) {
+    if (err.name === 'PasswordException' || err.message?.toLowerCase().includes('password')) {
+      return true;
+    }
+  }
+
+  try {
+    await PDFDocument.load(arrayBuffer, { ignoreEncryption: false });
+  } catch (err) {
+    if (err.message?.toLowerCase().includes('password') || err.message?.toLowerCase().includes('encrypted')) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Render all page thumbnails of a PDF file into base64 image data URLs.
+ */
+export async function renderPdfThumbnails(file) {
+  const isLocked = await checkPdfPassword(file);
+  if (isLocked) {
+    const err = new Error(`"${file.name}" is password-protected and cannot be processed.`);
+    err.lockedFiles = [file.name];
+    throw err;
+  }
+
+  const arrayBuffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  const numPages = pdf.numPages;
+  const thumbnails = [];
+
+  for (let i = 1; i <= numPages; i++) {
+    const page = await pdf.getPage(i);
+    const viewport = page.getViewport({ scale: 0.35 }); // Lightweight thumbnail size
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    canvas.height = viewport.height;
+    canvas.width = viewport.width;
+
+    await page.render({ canvasContext: ctx, viewport }).promise;
+    thumbnails.push({
+      pageNumber: i,
+      dataUrl: canvas.toDataURL('image/jpeg', 0.8)
+    });
+  }
+
+  return { totalPages: numPages, thumbnails };
+}
+
+/**
+ * Remove specific page indices (1-based) from a PDF.
+ */
+export async function removePagesFromPDF(file, pagesToRemoveSet) {
+  const isLocked = await checkPdfPassword(file);
+  if (isLocked) {
+    const err = new Error(`"${file.name}" is password-protected and cannot be processed.`);
+    err.lockedFiles = [file.name];
+    throw err;
+  }
+
+  const arrayBuffer = await file.arrayBuffer();
+  const pdfDoc = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
+  const totalPages = pdfDoc.getPageCount();
+
+  if (pagesToRemoveSet.size >= totalPages) {
+    throw new Error('You cannot remove all pages from the document.');
+  }
+
+  const newPdf = await PDFDocument.create();
+  const pagesToKeepIndices = [];
+
+  for (let i = 0; i < totalPages; i++) {
+    const pageNum = i + 1;
+    if (!pagesToRemoveSet.has(pageNum)) {
+      pagesToKeepIndices.push(i);
+    }
+  }
+
+  const copiedPages = await newPdf.copyPages(pdfDoc, pagesToKeepIndices);
+  copiedPages.forEach((page) => newPdf.addPage(page));
+
+  const bytes = await newPdf.save();
+  return {
+    blob: new Blob([bytes], { type: 'application/pdf' }),
+    filename: `edited_${file.name}`
+  };
+}
+
+/**
+ * Helper to safely load a PDFDocument using pdf-lib.
+ */
+async function loadPdfSafely(file) {
+  const isLocked = await checkPdfPassword(file);
+  if (isLocked) {
+    const err = new Error(`"${file.name}" is password-protected and cannot be processed.`);
+    err.lockedFiles = [file.name];
+    throw err;
+  }
+
+  const arrayBuffer = await file.arrayBuffer();
+  return await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
+}
+
+/**
+ * Helper to safely load a document using pdfjs-dist.
+ */
+async function loadPdfJsSafely(file) {
+  const arrayBuffer = await file.arrayBuffer();
+  try {
+    const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+    return await loadingTask.promise;
+  } catch (err) {
+    if (err.name === 'PasswordException' || err.message?.toLowerCase().includes('password')) {
+      const lockErr = new Error(`"${file.name}" is password-protected and cannot be processed.`);
+      lockErr.lockedFiles = [file.name];
+      throw lockErr;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Merge multiple PDF files.
  */
 export async function mergePDFs(fileList) {
+  const lockedFiles = [];
+
+  for (const file of fileList) {
+    const isLocked = await checkPdfPassword(file);
+    if (isLocked) {
+      lockedFiles.push(file.name);
+    }
+  }
+
+  if (lockedFiles.length > 0) {
+    const err = new Error('Password-protected files detected.');
+    err.lockedFiles = lockedFiles;
+    throw err;
+  }
+
   const mergedPdf = await PDFDocument.create();
 
   for (const file of fileList) {
     const arrayBuffer = await file.arrayBuffer();
-    const pdf = await PDFDocument.load(arrayBuffer);
+    const pdf = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
     const copiedPages = await mergedPdf.copyPages(pdf, pdf.getPageIndices());
     copiedPages.forEach((page) => mergedPdf.addPage(page));
   }
@@ -26,11 +172,10 @@ export async function mergePDFs(fileList) {
 }
 
 /**
- * Split PDF: Extract each page into separate PDFs packaged inside a ZIP.
+ * Split PDF: Extract each page into separate PDFs inside a ZIP.
  */
 export async function splitPDF(file) {
-  const arrayBuffer = await file.arrayBuffer();
-  const pdfDoc = await PDFDocument.load(arrayBuffer);
+  const pdfDoc = await loadPdfSafely(file);
   const totalPages = pdfDoc.getPageCount();
   const zip = new JSZip();
 
@@ -53,8 +198,7 @@ export async function splitPDF(file) {
  * Rotate all pages in a PDF by 90 degrees clockwise.
  */
 export async function rotatePDF(file, angle = 90) {
-  const arrayBuffer = await file.arrayBuffer();
-  const pdfDoc = await PDFDocument.load(arrayBuffer);
+  const pdfDoc = await loadPdfSafely(file);
   const pages = pdfDoc.getPages();
 
   pages.forEach((page) => {
@@ -104,11 +248,10 @@ export async function imagesToPDF(imageFileList) {
 }
 
 /**
- * Convert PDF pages to JPG image files (single JPG or ZIP for multi-page).
+ * Convert PDF pages to JPG image files.
  */
 export async function pdfToJpg(file) {
-  const arrayBuffer = await file.arrayBuffer();
-  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  const pdf = await loadPdfJsSafely(file);
   const numPages = pdf.numPages;
 
   if (numPages === 1) {
@@ -154,8 +297,7 @@ export async function pdfToJpg(file) {
  * Extract plain text and convert to Markdown.
  */
 export async function pdfToMarkdown(file) {
-  const arrayBuffer = await file.arrayBuffer();
-  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  const pdf = await loadPdfJsSafely(file);
   let markdown = `# Extracted Content: ${file.name}\n\n`;
 
   for (let i = 1; i <= pdf.numPages; i++) {
