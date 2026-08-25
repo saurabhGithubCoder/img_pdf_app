@@ -56,12 +56,54 @@ export async function renderPdfThumbnails(file) {
 
     await page.render({ canvasContext: ctx, viewport }).promise;
     thumbnails.push({
+      id: `page-${i}-${Date.now()}-${Math.random()}`,
+      originalIndex: i - 1, // 0-based index in original PDF
       pageNumber: i,
+      rotation: 0,          // User rotation offset (0, 90, 180, 270)
       dataUrl: canvas.toDataURL('image/jpeg', 0.8)
     });
   }
 
   return { totalPages: numPages, thumbnails };
+}
+
+/**
+ * Reorganize PDF: Apply reordering and page rotations
+ */
+export async function reorganizePDF(file, pageItems) {
+  const isLocked = await checkPdfPassword(file);
+  if (isLocked) {
+    const err = new Error(`"${file.name}" is password-protected and cannot be processed.`);
+    err.lockedFiles = [file.name];
+    throw err;
+  }
+
+  if (!pageItems || pageItems.length === 0) {
+    throw new Error('At least one page must remain in the document.');
+  }
+
+  const arrayBuffer = await file.arrayBuffer();
+  const originalPdf = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
+  const newPdf = await PDFDocument.create();
+
+  // Extract pages based on current organized ordering
+  const indices = pageItems.map((item) => item.originalIndex);
+  const copiedPages = await newPdf.copyPages(originalPdf, indices);
+
+  copiedPages.forEach((page, i) => {
+    const customRotation = pageItems[i].rotation || 0;
+    if (customRotation !== 0) {
+      const currentRot = page.getRotation().angle;
+      page.setRotation(degrees((currentRot + customRotation) % 360));
+    }
+    newPdf.addPage(page);
+  });
+
+  const bytes = await newPdf.save();
+  return {
+    blob: new Blob([bytes], { type: 'application/pdf' }),
+    filename: `organized_${file.name}`
+  };
 }
 
 /**
@@ -84,11 +126,10 @@ export async function extractPagesFromPDF(file, pagesToExtractSet) {
   }
 
   const newPdf = await PDFDocument.create();
-  // Sort selected pages in ascending sequence
   const sortedPages = Array.from(pagesToExtractSet)
     .filter((p) => p >= 1 && p <= totalPages)
     .sort((a, b) => a - b)
-    .map((p) => p - 1); // 0-based for pdf-lib
+    .map((p) => p - 1);
 
   const copiedPages = await newPdf.copyPages(pdfDoc, sortedPages);
   copiedPages.forEach((page) => newPdf.addPage(page));

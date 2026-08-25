@@ -13,7 +13,8 @@ import {
   Lock,
   Loader2,
   Check,
-  FolderInput
+  RotateCw,
+  GripVertical
 } from 'lucide-react';
 import {
   mergePDFs,
@@ -24,7 +25,8 @@ import {
   pdfToMarkdown,
   renderPdfThumbnails,
   removePagesFromPDF,
-  extractPagesFromPDF
+  extractPagesFromPDF,
+  reorganizePDF
 } from '../utils/pdfWorker';
 
 export default function ToolModal({ tool, onClose }) {
@@ -34,17 +36,19 @@ export default function ToolModal({ tool, onClose }) {
   const [errorMsg, setErrorMsg] = useState('');
   const [lockedFileNames, setLockedFileNames] = useState([]);
 
-  // Page-selector specific state (used by 'remove' and 'extract')
-  const isPageSelectionTool = tool.id === 'remove' || tool.id === 'extract';
+  // Page-selector specific state (used by 'remove', 'extract', and 'organize')
+  const isPageLevelTool = tool.id === 'remove' || tool.id === 'extract' || tool.id === 'organize';
   const [thumbnails, setThumbnails] = useState([]);
   const [totalPages, setTotalPages] = useState(0);
   const [isRenderingPages, setIsRenderingPages] = useState(false);
   const [selectedPages, setSelectedPages] = useState(new Set());
   const [rangeInput, setRangeInput] = useState('');
 
-  // Automatically load thumbnails when a single file is provided in page selection tools
+  // Drag-and-drop state for page reordering
+  const [draggedPageIndex, setDraggedPageIndex] = useState(null);
+
   useEffect(() => {
-    if (isPageSelectionTool && files.length > 0) {
+    if (isPageLevelTool && files.length > 0) {
       loadDocumentThumbnails(files[0]);
     }
   }, [files, tool.id]);
@@ -76,7 +80,7 @@ export default function ToolModal({ tool, onClose }) {
   const handleFilesAdded = (newFiles) => {
     setErrorMsg('');
     setLockedFileNames([]);
-    if (isPageSelectionTool) {
+    if (isPageLevelTool) {
       setFiles([newFiles[0]]);
     } else {
       setFiles((prev) => [...prev, ...Array.from(newFiles)]);
@@ -88,6 +92,45 @@ export default function ToolModal({ tool, onClose }) {
     if (e.dataTransfer.files) {
       handleFilesAdded(e.dataTransfer.files);
     }
+  };
+
+  // Reordering handlers for Organize tool
+  const handlePageDragStart = (e, index) => {
+    setDraggedPageIndex(index);
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handlePageDragOver = (e, index) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+  };
+
+  const handlePageDrop = (e, dropIndex) => {
+    e.preventDefault();
+    if (draggedPageIndex === null || draggedPageIndex === dropIndex) return;
+
+    const reordered = [...thumbnails];
+    const [draggedItem] = reordered.splice(draggedPageIndex, 1);
+    reordered.splice(dropIndex, 0, draggedItem);
+
+    setThumbnails(reordered);
+    setDraggedPageIndex(null);
+  };
+
+  // Rotate a single page by 90 degrees
+  const rotateSinglePage = (index) => {
+    const updated = [...thumbnails];
+    updated[index].rotation = (updated[index].rotation + 90) % 360;
+    setThumbnails(updated);
+  };
+
+  // Delete a single page in Organize mode
+  const deleteSinglePage = (index) => {
+    if (thumbnails.length <= 1) {
+      setErrorMsg('A PDF must contain at least one page.');
+      return;
+    }
+    setThumbnails(thumbnails.filter((_, idx) => idx !== index));
   };
 
   const setToStringRange = (numSet) => {
@@ -148,7 +191,7 @@ export default function ToolModal({ tool, onClose }) {
     setSelectedPages(newSet);
   };
 
-  const moveItem = (index, direction) => {
+  const moveFileItem = (index, direction) => {
     const updated = [...files];
     const targetIndex = index + direction;
     if (targetIndex < 0 || targetIndex >= updated.length) return;
@@ -158,12 +201,12 @@ export default function ToolModal({ tool, onClose }) {
     setFiles(updated);
   };
 
-  const removeItem = (index) => {
+  const removeFileItem = (index) => {
     const removedFile = files[index];
     setFiles(files.filter((_, idx) => idx !== index));
     setLockedFileNames((prev) => prev.filter((name) => name !== removedFile.name));
     if (lockedFileNames.length <= 1) setErrorMsg('');
-    if (isPageSelectionTool) {
+    if (isPageLevelTool) {
       setThumbnails([]);
       setSelectedPages(new Set());
     }
@@ -183,7 +226,7 @@ export default function ToolModal({ tool, onClose }) {
       return;
     }
 
-    if (isPageSelectionTool && selectedPages.size === 0) {
+    if ((tool.id === 'remove' || tool.id === 'extract') && selectedPages.size === 0) {
       setErrorMsg(`Please select at least one page to ${tool.id === 'remove' ? 'remove' : 'extract'}.`);
       return;
     }
@@ -199,6 +242,9 @@ export default function ToolModal({ tool, onClose }) {
       let output;
 
       switch (tool.id) {
+        case 'organize':
+          output = await reorganizePDF(files[0], thumbnails);
+          break;
         case 'merge':
           output = await mergePDFs(files);
           break;
@@ -253,7 +299,7 @@ export default function ToolModal({ tool, onClose }) {
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
       <div className={`bg-white rounded-3xl w-full p-6 sm:p-8 shadow-2xl border border-slate-100 relative animate-in fade-in zoom-in-95 duration-150 ${
-        isPageSelectionTool && thumbnails.length > 0 ? 'max-w-4xl' : 'max-w-xl'
+        isPageLevelTool && thumbnails.length > 0 ? 'max-w-4xl' : 'max-w-xl'
       }`}>
         <button
           onClick={onClose}
@@ -319,14 +365,108 @@ export default function ToolModal({ tool, onClose }) {
                     Drop PDF here or <span className="text-rose-500">browse</span>
                   </p>
                   <p className="text-xs text-slate-400">
-                    {isPageSelectionTool ? 'Select 1 PDF document' : 'Upload your document'}
+                    {isPageLevelTool ? 'Select 1 PDF document' : 'Upload your document'}
                   </p>
                 </label>
               </div>
             ) : null}
 
+            {/* Custom Visual Workspace for "Organize PDF" Tool */}
+            {tool.id === 'organize' && files.length > 0 && (
+              <div className="space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 bg-slate-50 rounded-2xl border border-slate-200 text-xs">
+                  <div className="flex items-center space-x-2 truncate">
+                    <FileText className="w-4 h-4 text-amber-600 shrink-0" />
+                    <span className="font-semibold truncate">{files[0].name}</span>
+                    <span className="text-slate-400">({thumbnails.length} pages)</span>
+                  </div>
+                  <button
+                    onClick={() => removeFileItem(0)}
+                    className="text-amber-600 hover:text-amber-700 font-medium self-end sm:self-auto"
+                  >
+                    Change File
+                  </button>
+                </div>
+
+                <div className="text-xs text-slate-500 font-medium flex items-center justify-between">
+                  <span>Hold & drag pages to reorder. Use hover actions to rotate or delete.</span>
+                  <span>{thumbnails.length} Pages</span>
+                </div>
+
+                {/* Thumbnails Organizing Grid */}
+                {isRenderingPages ? (
+                  <div className="py-12 text-center text-slate-400 space-y-2">
+                    <Loader2 className="w-7 h-7 animate-spin mx-auto text-amber-500" />
+                    <p className="text-xs">Generating and analyzing pages...</p>
+                  </div>
+                ) : (
+                  <div className="max-h-72 overflow-y-auto p-3 bg-slate-100/60 rounded-2xl border border-slate-200 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3.5">
+                    {thumbnails.map((thumb, idx) => (
+                      <div
+                        key={thumb.id}
+                        draggable
+                        onDragStart={(e) => handlePageDragStart(e, idx)}
+                        onDragOver={(e) => handlePageDragOver(e, idx)}
+                        onDrop={(e) => handlePageDrop(e, idx)}
+                        className={`group relative rounded-xl border-2 bg-white shadow-sm overflow-hidden cursor-grab active:cursor-grabbing transition-all ${
+                          draggedPageIndex === idx ? 'opacity-40 scale-95 border-amber-400' : 'border-slate-200 hover:border-amber-400 hover:shadow-md'
+                        }`}
+                      >
+                        {/* Page Preview Container with custom rotation */}
+                        <div className="p-2 flex items-center justify-center min-h-[140px] bg-slate-50">
+                          <img
+                            src={thumb.dataUrl}
+                            alt={`Page ${idx + 1}`}
+                            style={{ transform: `rotate(${thumb.rotation}deg)` }}
+                            className="max-h-32 object-contain transition-transform duration-200"
+                          />
+                        </div>
+
+                        {/* Top Action Overlay (Rotate & Delete) */}
+                        <div className="absolute top-1.5 right-1.5 flex items-center space-x-1 opacity-90 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              rotateSinglePage(idx);
+                            }}
+                            className="p-1.5 bg-white/90 hover:bg-white text-slate-700 rounded-lg shadow hover:text-amber-600 transition"
+                            title="Rotate 90° Clockwise"
+                          >
+                            <RotateCw className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              deleteSinglePage(idx);
+                            }}
+                            className="p-1.5 bg-white/90 hover:bg-white text-slate-700 rounded-lg shadow hover:text-red-600 transition"
+                            title="Remove Page"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+
+                        {/* Bottom Index Badge */}
+                        <div className="px-2 py-1 bg-white border-t border-slate-100 flex items-center justify-between text-[10px] text-slate-500 font-semibold">
+                          <div className="flex items-center space-x-1">
+                            <GripVertical className="w-3 h-3 text-slate-400" />
+                            <span>Pos: {idx + 1}</span>
+                          </div>
+                          {thumb.rotation !== 0 && (
+                            <span className="text-amber-600 font-bold">{thumb.rotation}°</span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Visual Page Workspace (Remove & Extract Pages) */}
-            {isPageSelectionTool && files.length > 0 && (
+            {(tool.id === 'remove' || tool.id === 'extract') && files.length > 0 && (
               <div className="space-y-4">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 bg-slate-50 rounded-2xl border border-slate-200 text-xs">
                   <div className="flex items-center space-x-2 truncate">
@@ -335,14 +475,13 @@ export default function ToolModal({ tool, onClose }) {
                     <span className="text-slate-400">({totalPages} pages)</span>
                   </div>
                   <button
-                    onClick={() => removeItem(0)}
+                    onClick={() => removeFileItem(0)}
                     className="text-rose-600 hover:text-rose-700 font-medium self-end sm:self-auto"
                   >
                     Change File
                   </button>
                 </div>
 
-                {/* Range Input Section */}
                 <div className="space-y-1.5">
                   <label className="text-xs font-semibold text-slate-700">
                     Pages to {tool.id === 'remove' ? 'remove' : 'extract'} (Type range or click thumbnails):
@@ -356,7 +495,6 @@ export default function ToolModal({ tool, onClose }) {
                   />
                 </div>
 
-                {/* Thumbnails Grid */}
                 {isRenderingPages ? (
                   <div className="py-12 text-center text-slate-400 space-y-2">
                     <Loader2 className="w-7 h-7 animate-spin mx-auto text-rose-500" />
@@ -392,7 +530,6 @@ export default function ToolModal({ tool, onClose }) {
                             }`}
                           />
 
-                          {/* Selected Overlay Marker */}
                           {isSelected && (
                             <div className={`absolute inset-0 flex flex-col items-center justify-center ${
                               isRemoveMode ? 'bg-red-500/20' : 'bg-emerald-500/20'
@@ -405,7 +542,6 @@ export default function ToolModal({ tool, onClose }) {
                             </div>
                           )}
 
-                          {/* Page Number Badge */}
                           <span className={`absolute bottom-1 right-1 text-[10px] font-bold px-1.5 py-0.5 rounded shadow ${
                             isSelected
                               ? isRemoveMode ? 'bg-red-500 text-white' : 'bg-emerald-600 text-white'
@@ -422,7 +558,7 @@ export default function ToolModal({ tool, onClose }) {
             )}
 
             {/* Standard Multi-File Workspace for Other Tools */}
-            {!isPageSelectionTool && files.length > 0 && (
+            {!isPageLevelTool && files.length > 0 && (
               <div className="mt-4 space-y-2">
                 <div className="flex items-center justify-between text-xs font-semibold text-slate-500 px-1">
                   <span>Selected Files ({files.length})</span>
@@ -464,7 +600,7 @@ export default function ToolModal({ tool, onClose }) {
                             <>
                               <button
                                 type="button"
-                                onClick={() => moveItem(idx, -1)}
+                                onClick={() => moveFileItem(idx, -1)}
                                 disabled={idx === 0}
                                 className="p-1 hover:bg-slate-200 disabled:opacity-30 rounded text-slate-600 transition"
                                 title="Move Up"
@@ -473,7 +609,7 @@ export default function ToolModal({ tool, onClose }) {
                               </button>
                               <button
                                 type="button"
-                                onClick={() => moveItem(idx, 1)}
+                                onClick={() => moveFileItem(idx, 1)}
                                 disabled={idx === files.length - 1}
                                 className="p-1 hover:bg-slate-200 disabled:opacity-30 rounded text-slate-600 transition"
                                 title="Move Down"
@@ -484,7 +620,7 @@ export default function ToolModal({ tool, onClose }) {
                           )}
                           <button
                             type="button"
-                            onClick={() => removeItem(idx)}
+                            onClick={() => removeFileItem(idx)}
                             className="p-1 hover:bg-red-100 text-slate-400 hover:text-red-500 rounded transition"
                             title="Remove"
                           >
@@ -503,19 +639,22 @@ export default function ToolModal({ tool, onClose }) {
               disabled={
                 files.length === 0 ||
                 (tool.id === 'merge' && files.length < 2) ||
-                (isPageSelectionTool && selectedPages.size === 0) ||
+                ((tool.id === 'remove' || tool.id === 'extract') && selectedPages.size === 0) ||
                 (tool.id === 'remove' && selectedPages.size >= totalPages) ||
+                (tool.id === 'organize' && thumbnails.length === 0) ||
                 isProcessing ||
                 isRenderingPages
               }
               className="mt-6 w-full py-3.5 bg-rose-500 hover:bg-rose-600 disabled:opacity-50 text-white rounded-xl font-medium shadow-md shadow-rose-500/20 transition flex items-center justify-center space-x-2"
             >
               {isProcessing ? (
-                <span className="text-sm">Processing in browser...</span>
+                <span className="text-sm">Saving organized document...</span>
               ) : (
                 <>
                   <span className="text-sm">
-                    {tool.id === 'remove'
+                    {tool.id === 'organize'
+                      ? `Save Organized PDF (${thumbnails.length} Pages)`
+                      : tool.id === 'remove'
                       ? `Remove ${selectedPages.size} ${selectedPages.size === 1 ? 'Page' : 'Pages'}`
                       : tool.id === 'extract'
                       ? `Extract ${selectedPages.size} ${selectedPages.size === 1 ? 'Page' : 'Pages'}`
@@ -532,7 +671,7 @@ export default function ToolModal({ tool, onClose }) {
           <div className="text-center py-6 space-y-4">
             <CheckCircle2 className="w-12 h-12 text-emerald-500 mx-auto" />
             <h4 className="text-lg font-bold text-slate-900">
-              {tool.id === 'extract' ? 'Pages Extracted Successfully!' : 'Processing Complete!'}
+              {tool.id === 'organize' ? 'PDF Organized Successfully!' : 'Processing Complete!'}
             </h4>
             <p className="text-xs text-slate-500 truncate px-4">
               Generated: <span className="font-semibold text-slate-700">{result.filename}</span>
