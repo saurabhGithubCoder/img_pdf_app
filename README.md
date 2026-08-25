@@ -19,6 +19,9 @@ FROM node:20-slim
 ## libreoffice for local 
 sudo apt-get update && sudo apt-get install -y libreoffice
 
+## libreoffice ghost script for compression of pdf 
+sudo apt-get update && sudo apt-get install -y ghostscript
+
 # Install LibreOffice and minimal fonts for rendering
 RUN apt-get update && apt-get install -y \
     libreoffice \
@@ -38,6 +41,16 @@ COPY . .
 EXPOSE 5000
 CMD ["node", "server.js"]
 ``
+
+------ ghostscript -----
+RUN apt-get update && apt-get install -y \
+    libreoffice \
+    libreoffice-writer \
+    ghostscript \
+    fonts-liberation \
+    fonts-dejavu \
+    --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
 
 ## Steps to Deploy:
 1. Frontend (Vite): Deploy your React app as a Static Site on Render. Set VITE_API_BASE_URL (or update your API fetch URL) to point to your live backend service URL instead of /api.

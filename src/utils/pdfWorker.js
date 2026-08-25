@@ -31,9 +31,8 @@ export async function checkPdfPassword(file) {
 }
 
 /**
- * Genuine client-side PDF compression.
- * Scales document raster DPI and recompresses image streams to achieve actual size reduction.
- * * @param {File} file - Original PDF file
+ * Genuine PDF compression using the backend Ghostscript optimization engine.
+ * @param {File} file - Original PDF file
  * @param {number} compressionLevel - Target reduction slider (10 to 90)
  */
 export async function compressPDF(file, compressionLevel = 45) {
@@ -44,76 +43,32 @@ export async function compressPDF(file, compressionLevel = 45) {
     throw err;
   }
 
-  const arrayBuffer = await file.arrayBuffer();
-  const pdfjsDoc = await pdfjsLib.getDocument({ data: arrayBuffer.slice(0) }).promise;
-  const numPages = pdfjsDoc.numPages;
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('compressionPercent', compressionLevel.toString());
 
-  // Map compression slider percentage to rendering scale & quality
-  // Standard A4 is 595 x 842 points. 
-  // Scale 1.0 = ~72 DPI (Standard Web/Doc quality)
-  // Scale 1.25 = ~90 DPI (Crisp Text)
-  // Scale 0.85 = ~60 DPI (Maximum Compression)
-  const ratio = Math.min(Math.max(compressionLevel / 100, 0.1), 0.9);
-  
-  // Dynamic scale factor: from 1.25 (at 10%) down to 0.75 (at 90%)
-  const renderScale = 1.30 - (ratio * 0.55);
-  
-  // Dynamic JPEG quality: from 0.80 (at 10%) down to 0.30 (at 90%)
-  const jpegQuality = 0.82 - (ratio * 0.52);
-
-  const compressedPdf = await PDFDocument.create();
-
-  for (let pageNum = 1; pageNum <= numPages; pageNum++) {
-    const page = await pdfjsDoc.getPage(pageNum);
-    const unscaledViewport = page.getViewport({ scale: 1.0 });
-    const targetViewport = page.getViewport({ scale: renderScale });
-
-    // Render page to an offscreen Canvas
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d', { alpha: false, willReadFrequently: false });
-    canvas.width = Math.floor(targetViewport.width);
-    canvas.height = Math.floor(targetViewport.height);
-
-    // Apply crisp solid white backdrop
-    ctx.fillStyle = '#FFFFFF';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    await page.render({
-      canvasContext: ctx,
-      viewport: targetViewport,
-      intent: 'display'
-    }).promise;
-
-    // Encode rendered frame as compressed JPEG buffer
-    const jpegDataUrl = canvas.toDataURL('image/jpeg', jpegQuality);
-    const jpegBuffer = await fetch(jpegDataUrl).then((r) => r.arrayBuffer());
-
-    // Embed compressed frame into the output PDF
-    const embeddedImg = await compressedPdf.embedJpg(jpegBuffer);
-    
-    // Add page preserving exact original physical dimensions
-    const newPage = compressedPdf.addPage([unscaledViewport.width, unscaledViewport.height]);
-    newPage.drawImage(embeddedImg, {
-      x: 0,
-      y: 0,
-      width: unscaledViewport.width,
-      height: unscaledViewport.height,
-    });
-  }
-
-  // Strip metadata & save with object stream compression
-  const compressedBytes = await compressedPdf.save({
-    useObjectStreams: true,
-    addDefaultPage: false
+  const response = await fetch('/api/compress-pdf', {
+    method: 'POST',
+    body: formData,
   });
 
-  const outputBlob = new Blob([compressedBytes], { type: 'application/pdf' });
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.error || 'Server failed to compress PDF.');
+  }
+
+  const pdfBlob = await response.blob();
+  const originalSizeHeader = response.headers.get('x-original-size');
+  const compressedSizeHeader = response.headers.get('x-compressed-size');
+
+  const origSize = originalSizeHeader ? parseInt(originalSizeHeader, 10) : file.size;
+  const compSize = compressedSizeHeader ? parseInt(compressedSizeHeader, 10) : pdfBlob.size;
 
   return {
-    blob: outputBlob,
+    blob: pdfBlob,
     filename: `compressed_${file.name}`,
-    originalSize: file.size,
-    compressedSize: outputBlob.size,
+    originalSize: origSize,
+    compressedSize: compSize,
   };
 }
 

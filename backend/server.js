@@ -3,6 +3,10 @@ const cors = require('cors');
 const multer = require('multer');
 const libre = require('libreoffice-convert');
 const util = require('util');
+const { spawn } = require('child_process');
+const fs = require('fs/promises');
+const path = require('path');
+const os = require('os');
 
 const libreConvert = util.promisify(libre.convert);
 const app = express();
@@ -138,6 +142,88 @@ app.post('/api/convert/excel-to-pdf', upload.single('file'), async (req, res) =>
   } catch (error) {
     console.error('Excel conversion error:', error);
     return res.status(500).json({ error: 'Failed to convert Excel spreadsheet with LibreOffice.' });
+  }
+});
+
+// Ghostscript PDF Compression Function
+async function compressWithGhostscript(inputBuffer, qualityLevel = 45) {
+  const tempId = `compress_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+  const tempDir = os.tmpdir();
+  const inputPath = path.join(tempDir, `${tempId}_in.pdf`);
+  const outputPath = path.join(tempDir, `${tempId}_out.pdf`);
+
+  await fs.writeFile(inputPath, inputBuffer);
+
+  // Map compression percentage slider to Ghostscript PDF settings
+  let pdfSetting = '/ebook'; // Balanced (150 DPI)
+  if (qualityLevel <= 30) {
+    pdfSetting = '/printer'; // High quality (300 DPI)
+  } else if (qualityLevel >= 65) {
+    pdfSetting = '/screen'; // Maximum compression (72 DPI)
+  }
+
+  const gsArgs = [
+    '-sDEVICE=pdfwrite',
+    '-dCompatibilityLevel=1.4',
+    `-dPDFSETTINGS=${pdfSetting}`,
+    '-dNOPAUSE',
+    '-dQUIET',
+    '-dBATCH',
+    `-sOutputFile=${outputPath}`,
+    inputPath,
+  ];
+
+  return new Promise((resolve, reject) => {
+    const gs = spawn('gs', gsArgs);
+
+    gs.on('close', async (code) => {
+      try {
+        if (code === 0) {
+          const compressedBuffer = await fs.readFile(outputPath);
+          resolve(compressedBuffer);
+        } else {
+          reject(new Error(`Ghostscript exited with code ${code}`));
+        }
+      } catch (err) {
+        reject(err);
+      } finally {
+        // Cleanup temp files immediately
+        await fs.unlink(inputPath).catch(() => {});
+        await fs.unlink(outputPath).catch(() => {});
+      }
+    });
+
+    gs.on('error', (err) => {
+      reject(err);
+    });
+  });
+}
+
+// 5. Compress PDF Endpoint
+app.post('/api/compress-pdf', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No PDF file uploaded.' });
+    }
+
+    const compressionPercent = parseInt(req.body.compressionPercent || '45', 10);
+    const originalSize = req.file.buffer.length;
+
+    const compressedBuffer = await compressWithGhostscript(req.file.buffer, compressionPercent);
+
+    // Fallback if the file is already maximally compressed
+    const finalBuffer = compressedBuffer.length < originalSize ? compressedBuffer : req.file.buffer;
+
+    const originalName = req.file.originalname.replace(/\.[^/.]+$/, '');
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="compressed_${originalName}.pdf"`);
+    res.setHeader('x-original-size', originalSize.toString());
+    res.setHeader('x-compressed-size', finalBuffer.length.toString());
+
+    return res.send(finalBuffer);
+  } catch (error) {
+    console.error('Ghostscript compression error:', error);
+    return res.status(500).json({ error: 'Failed to compress PDF.' });
   }
 });
 

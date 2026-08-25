@@ -1061,6 +1061,8 @@ export default function ToolModal({ tool, onClose }) {
                 <span className="text-sm">
                   {['word-to-pdf', 'powerpoint-to-pdf', 'excel-to-pdf', 'html-to-pdf'].includes(tool.id)
                     ? 'Converting via LibreOffice...'
+                    : tool.id === 'compress'
+                    ? 'Compressing via Ghostscript Engine...'
                     : 'Processing in browser...'}
                 </span>
               ) : (
