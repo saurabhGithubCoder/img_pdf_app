@@ -48,7 +48,7 @@ export async function renderPdfThumbnails(file) {
 
   for (let i = 1; i <= numPages; i++) {
     const page = await pdf.getPage(i);
-    const viewport = page.getViewport({ scale: 0.35 }); // Lightweight thumbnail size
+    const viewport = page.getViewport({ scale: 0.35 });
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
     canvas.height = viewport.height;
@@ -62,6 +62,42 @@ export async function renderPdfThumbnails(file) {
   }
 
   return { totalPages: numPages, thumbnails };
+}
+
+/**
+ * Extract specific page indices (1-based) into a new PDF.
+ */
+export async function extractPagesFromPDF(file, pagesToExtractSet) {
+  const isLocked = await checkPdfPassword(file);
+  if (isLocked) {
+    const err = new Error(`"${file.name}" is password-protected and cannot be processed.`);
+    err.lockedFiles = [file.name];
+    throw err;
+  }
+
+  const arrayBuffer = await file.arrayBuffer();
+  const pdfDoc = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
+  const totalPages = pdfDoc.getPageCount();
+
+  if (pagesToExtractSet.size === 0) {
+    throw new Error('Please select at least one page to extract.');
+  }
+
+  const newPdf = await PDFDocument.create();
+  // Sort selected pages in ascending sequence
+  const sortedPages = Array.from(pagesToExtractSet)
+    .filter((p) => p >= 1 && p <= totalPages)
+    .sort((a, b) => a - b)
+    .map((p) => p - 1); // 0-based for pdf-lib
+
+  const copiedPages = await newPdf.copyPages(pdfDoc, sortedPages);
+  copiedPages.forEach((page) => newPdf.addPage(page));
+
+  const bytes = await newPdf.save();
+  return {
+    blob: new Blob([bytes], { type: 'application/pdf' }),
+    filename: `extracted_${file.name}`
+  };
 }
 
 /**

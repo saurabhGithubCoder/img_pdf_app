@@ -12,7 +12,8 @@ import {
   AlertCircle,
   Lock,
   Loader2,
-  Check
+  Check,
+  FolderInput
 } from 'lucide-react';
 import {
   mergePDFs,
@@ -22,7 +23,8 @@ import {
   pdfToJpg,
   pdfToMarkdown,
   renderPdfThumbnails,
-  removePagesFromPDF
+  removePagesFromPDF,
+  extractPagesFromPDF
 } from '../utils/pdfWorker';
 
 export default function ToolModal({ tool, onClose }) {
@@ -32,16 +34,17 @@ export default function ToolModal({ tool, onClose }) {
   const [errorMsg, setErrorMsg] = useState('');
   const [lockedFileNames, setLockedFileNames] = useState([]);
 
-  // Remove Pages specific state
+  // Page-selector specific state (used by 'remove' and 'extract')
+  const isPageSelectionTool = tool.id === 'remove' || tool.id === 'extract';
   const [thumbnails, setThumbnails] = useState([]);
   const [totalPages, setTotalPages] = useState(0);
   const [isRenderingPages, setIsRenderingPages] = useState(false);
-  const [pagesToRemove, setPagesToRemove] = useState(new Set());
+  const [selectedPages, setSelectedPages] = useState(new Set());
   const [rangeInput, setRangeInput] = useState('');
 
-  // Automatically parse PDF thumbnails when a file is uploaded in 'remove' mode
+  // Automatically load thumbnails when a single file is provided in page selection tools
   useEffect(() => {
-    if (tool.id === 'remove' && files.length > 0) {
+    if (isPageSelectionTool && files.length > 0) {
       loadDocumentThumbnails(files[0]);
     }
   }, [files, tool.id]);
@@ -51,7 +54,7 @@ export default function ToolModal({ tool, onClose }) {
     setLockedFileNames([]);
     setIsRenderingPages(true);
     setThumbnails([]);
-    setPagesToRemove(new Set());
+    setSelectedPages(new Set());
     setRangeInput('');
 
     try {
@@ -61,7 +64,7 @@ export default function ToolModal({ tool, onClose }) {
     } catch (err) {
       if (err.lockedFiles) {
         setLockedFileNames(err.lockedFiles);
-        setErrorMsg(`Cannot load thumbnails: "${file.name}" is password-protected.`);
+        setErrorMsg(`Cannot process: "${file.name}" is password-protected.`);
       } else {
         setErrorMsg('Failed to read PDF pages. The file might be corrupted.');
       }
@@ -73,8 +76,8 @@ export default function ToolModal({ tool, onClose }) {
   const handleFilesAdded = (newFiles) => {
     setErrorMsg('');
     setLockedFileNames([]);
-    if (tool.id === 'remove') {
-      setFiles([newFiles[0]]); // Only 1 file allowed for remove pages
+    if (isPageSelectionTool) {
+      setFiles([newFiles[0]]);
     } else {
       setFiles((prev) => [...prev, ...Array.from(newFiles)]);
     }
@@ -87,7 +90,6 @@ export default function ToolModal({ tool, onClose }) {
     }
   };
 
-  // Convert Set of page numbers to range string (e.g. Set(1,2,3,5) -> "1-3, 5")
   const setToStringRange = (numSet) => {
     const sorted = Array.from(numSet).sort((a, b) => a - b);
     if (sorted.length === 0) return '';
@@ -109,19 +111,17 @@ export default function ToolModal({ tool, onClose }) {
     return ranges.join(', ');
   };
 
-  // Toggle page removal from thumbnail click
-  const togglePageRemoval = (pageNum) => {
-    const updated = new Set(pagesToRemove);
+  const togglePageSelection = (pageNum) => {
+    const updated = new Set(selectedPages);
     if (updated.has(pageNum)) {
       updated.delete(pageNum);
     } else {
       updated.add(pageNum);
     }
-    setPagesToRemove(updated);
+    setSelectedPages(updated);
     setRangeInput(setToStringRange(updated));
   };
 
-  // Parse text range input (e.g., "1, 3-5, 8")
   const handleRangeInputChange = (e) => {
     const val = e.target.value;
     setRangeInput(val);
@@ -145,7 +145,7 @@ export default function ToolModal({ tool, onClose }) {
       }
     });
 
-    setPagesToRemove(newSet);
+    setSelectedPages(newSet);
   };
 
   const moveItem = (index, direction) => {
@@ -163,9 +163,9 @@ export default function ToolModal({ tool, onClose }) {
     setFiles(files.filter((_, idx) => idx !== index));
     setLockedFileNames((prev) => prev.filter((name) => name !== removedFile.name));
     if (lockedFileNames.length <= 1) setErrorMsg('');
-    if (tool.id === 'remove') {
+    if (isPageSelectionTool) {
       setThumbnails([]);
-      setPagesToRemove(new Set());
+      setSelectedPages(new Set());
     }
   };
 
@@ -183,12 +183,12 @@ export default function ToolModal({ tool, onClose }) {
       return;
     }
 
-    if (tool.id === 'remove' && pagesToRemove.size === 0) {
-      setErrorMsg('Please select at least one page to remove.');
+    if (isPageSelectionTool && selectedPages.size === 0) {
+      setErrorMsg(`Please select at least one page to ${tool.id === 'remove' ? 'remove' : 'extract'}.`);
       return;
     }
 
-    if (tool.id === 'remove' && pagesToRemove.size >= totalPages) {
+    if (tool.id === 'remove' && selectedPages.size >= totalPages) {
       setErrorMsg('You cannot remove all pages from the document.');
       return;
     }
@@ -203,7 +203,10 @@ export default function ToolModal({ tool, onClose }) {
           output = await mergePDFs(files);
           break;
         case 'remove':
-          output = await removePagesFromPDF(files[0], pagesToRemove);
+          output = await removePagesFromPDF(files[0], selectedPages);
+          break;
+        case 'extract':
+          output = await extractPagesFromPDF(files[0], selectedPages);
           break;
         case 'split':
           output = await splitPDF(files[0]);
@@ -250,7 +253,7 @@ export default function ToolModal({ tool, onClose }) {
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
       <div className={`bg-white rounded-3xl w-full p-6 sm:p-8 shadow-2xl border border-slate-100 relative animate-in fade-in zoom-in-95 duration-150 ${
-        tool.id === 'remove' && thumbnails.length > 0 ? 'max-w-4xl' : 'max-w-xl'
+        isPageSelectionTool && thumbnails.length > 0 ? 'max-w-4xl' : 'max-w-xl'
       }`}>
         <button
           onClick={onClose}
@@ -316,14 +319,14 @@ export default function ToolModal({ tool, onClose }) {
                     Drop PDF here or <span className="text-rose-500">browse</span>
                   </p>
                   <p className="text-xs text-slate-400">
-                    {tool.id === 'remove' ? 'Select 1 PDF to remove pages' : 'Upload your document'}
+                    {isPageSelectionTool ? 'Select 1 PDF document' : 'Upload your document'}
                   </p>
                 </label>
               </div>
             ) : null}
 
-            {/* Custom Workspace for "Remove Pages" Tool */}
-            {tool.id === 'remove' && files.length > 0 && (
+            {/* Visual Page Workspace (Remove & Extract Pages) */}
+            {isPageSelectionTool && files.length > 0 && (
               <div className="space-y-4">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 bg-slate-50 rounded-2xl border border-slate-200 text-xs">
                   <div className="flex items-center space-x-2 truncate">
@@ -342,7 +345,7 @@ export default function ToolModal({ tool, onClose }) {
                 {/* Range Input Section */}
                 <div className="space-y-1.5">
                   <label className="text-xs font-semibold text-slate-700">
-                    Pages to remove (Type range or click thumbnails below):
+                    Pages to {tool.id === 'remove' ? 'remove' : 'extract'} (Type range or click thumbnails):
                   </label>
                   <input
                     type="text"
@@ -362,14 +365,18 @@ export default function ToolModal({ tool, onClose }) {
                 ) : (
                   <div className="max-h-72 overflow-y-auto p-2 bg-slate-100/60 rounded-2xl border border-slate-200 grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-3">
                     {thumbnails.map((thumb) => {
-                      const isSelected = pagesToRemove.has(thumb.pageNumber);
+                      const isSelected = selectedPages.has(thumb.pageNumber);
+                      const isRemoveMode = tool.id === 'remove';
+
                       return (
                         <div
                           key={thumb.pageNumber}
-                          onClick={() => togglePageRemoval(thumb.pageNumber)}
+                          onClick={() => togglePageSelection(thumb.pageNumber)}
                           className={`group relative rounded-xl border-2 overflow-hidden cursor-pointer transition-all ${
                             isSelected
-                              ? 'border-red-500 shadow-md ring-2 ring-red-400/20'
+                              ? isRemoveMode
+                                ? 'border-red-500 shadow-md ring-2 ring-red-400/20'
+                                : 'border-emerald-500 shadow-md ring-2 ring-emerald-400/20'
                               : 'border-white hover:border-slate-300 shadow-sm'
                           }`}
                         >
@@ -377,22 +384,32 @@ export default function ToolModal({ tool, onClose }) {
                             src={thumb.dataUrl}
                             alt={`Page ${thumb.pageNumber}`}
                             className={`w-full h-auto object-cover transition duration-150 ${
-                              isSelected ? 'opacity-40 grayscale' : 'group-hover:scale-105'
+                              isSelected
+                                ? isRemoveMode
+                                  ? 'opacity-40 grayscale'
+                                  : 'opacity-85'
+                                : 'group-hover:scale-105'
                             }`}
                           />
 
                           {/* Selected Overlay Marker */}
                           {isSelected && (
-                            <div className="absolute inset-0 bg-red-500/20 flex flex-col items-center justify-center">
-                              <div className="w-6 h-6 rounded-full bg-red-500 text-white flex items-center justify-center shadow">
-                                <Trash2 className="w-3.5 h-3.5" />
+                            <div className={`absolute inset-0 flex flex-col items-center justify-center ${
+                              isRemoveMode ? 'bg-red-500/20' : 'bg-emerald-500/20'
+                            }`}>
+                              <div className={`w-6 h-6 rounded-full text-white flex items-center justify-center shadow ${
+                                isRemoveMode ? 'bg-red-500' : 'bg-emerald-600'
+                              }`}>
+                                {isRemoveMode ? <Trash2 className="w-3.5 h-3.5" /> : <Check className="w-3.5 h-3.5 stroke-[3]" />}
                               </div>
                             </div>
                           )}
 
                           {/* Page Number Badge */}
                           <span className={`absolute bottom-1 right-1 text-[10px] font-bold px-1.5 py-0.5 rounded shadow ${
-                            isSelected ? 'bg-red-500 text-white' : 'bg-slate-900/70 text-white'
+                            isSelected
+                              ? isRemoveMode ? 'bg-red-500 text-white' : 'bg-emerald-600 text-white'
+                              : 'bg-slate-900/70 text-white'
                           }`}>
                             {thumb.pageNumber}
                           </span>
@@ -405,7 +422,7 @@ export default function ToolModal({ tool, onClose }) {
             )}
 
             {/* Standard Multi-File Workspace for Other Tools */}
-            {tool.id !== 'remove' && files.length > 0 && (
+            {!isPageSelectionTool && files.length > 0 && (
               <div className="mt-4 space-y-2">
                 <div className="flex items-center justify-between text-xs font-semibold text-slate-500 px-1">
                   <span>Selected Files ({files.length})</span>
@@ -486,7 +503,8 @@ export default function ToolModal({ tool, onClose }) {
               disabled={
                 files.length === 0 ||
                 (tool.id === 'merge' && files.length < 2) ||
-                (tool.id === 'remove' && (pagesToRemove.size === 0 || pagesToRemove.size >= totalPages)) ||
+                (isPageSelectionTool && selectedPages.size === 0) ||
+                (tool.id === 'remove' && selectedPages.size >= totalPages) ||
                 isProcessing ||
                 isRenderingPages
               }
@@ -498,7 +516,9 @@ export default function ToolModal({ tool, onClose }) {
                 <>
                   <span className="text-sm">
                     {tool.id === 'remove'
-                      ? `Remove ${pagesToRemove.size} ${pagesToRemove.size === 1 ? 'Page' : 'Pages'}`
+                      ? `Remove ${selectedPages.size} ${selectedPages.size === 1 ? 'Page' : 'Pages'}`
+                      : tool.id === 'extract'
+                      ? `Extract ${selectedPages.size} ${selectedPages.size === 1 ? 'Page' : 'Pages'}`
                       : tool.id === 'merge'
                       ? `Merge ${files.length} PDFs`
                       : `Run ${tool.name}`}
@@ -511,7 +531,9 @@ export default function ToolModal({ tool, onClose }) {
         ) : (
           <div className="text-center py-6 space-y-4">
             <CheckCircle2 className="w-12 h-12 text-emerald-500 mx-auto" />
-            <h4 className="text-lg font-bold text-slate-900">Pages Removed Successfully!</h4>
+            <h4 className="text-lg font-bold text-slate-900">
+              {tool.id === 'extract' ? 'Pages Extracted Successfully!' : 'Processing Complete!'}
+            </h4>
             <p className="text-xs text-slate-500 truncate px-4">
               Generated: <span className="font-semibold text-slate-700">{result.filename}</span>
             </p>
