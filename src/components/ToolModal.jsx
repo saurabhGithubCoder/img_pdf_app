@@ -41,6 +41,7 @@ import {
   convertHtmlToPDF,
   convertExcelToPDF,
   checkExcelPassword,
+  convertPdfToWord
 } from '../utils/pdfWorker';
 
 export default function ToolModal({ tool, onClose }) {
@@ -394,8 +395,8 @@ export default function ToolModal({ tool, onClose }) {
       let output;
 
       switch (tool.id) {
-        case 'rotate':
-          output = await rotatePDF(files[0], thumbnails);
+        case 'pdf-to-word':
+          output = await convertPdfToWord(files[0]);
           break;
         case 'excel-to-pdf':
           output = await convertExcelToPDF(files[0]);
@@ -429,6 +430,9 @@ export default function ToolModal({ tool, onClose }) {
           break;
         case 'split':
           output = await splitPDF(files[0]);
+          break;
+        case 'rotate':
+          output = await rotatePDF(files[0], thumbnails);
           break;
         case 'pdf-to-jpg':
           output = await pdfToJpg(files[0]);
@@ -1162,6 +1166,8 @@ export default function ToolModal({ tool, onClose }) {
                   : tool.id === 'excel-to-pdf'
                   ? 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/20'
                   : tool.id === 'html-to-pdf'
+                  ? 'bg-amber-600 hover:bg-amber-700 shadow-amber-600/20'
+                  : tool.id === 'pdf-to-word'
                   ? 'bg-blue-600 hover:bg-blue-700 shadow-blue-600/20'
                   : tool.id === 'rotate'
                   ? 'bg-purple-600 hover:bg-purple-700 shadow-purple-600/20'
@@ -1182,8 +1188,8 @@ export default function ToolModal({ tool, onClose }) {
               ) : (
                 <>
                   <span className="text-sm font-medium">
-                    {tool.id === 'rotate'
-                      ? `Save Rotated PDF (${thumbnails.length} Pages)`
+                    {tool.id === 'pdf-to-word'
+                      ? 'Convert PDF to WORD'
                       : tool.id === 'excel-to-pdf'
                       ? 'Convert EXCEL to PDF'
                       : tool.id === 'html-to-pdf'
@@ -1192,6 +1198,8 @@ export default function ToolModal({ tool, onClose }) {
                       ? 'Convert POWERPOINT to PDF'
                       : tool.id === 'word-to-pdf'
                       ? 'Convert WORD to PDF'
+                      : tool.id === 'rotate'
+                      ? `Save Rotated PDF (${thumbnails.length} Pages)`
                       : tool.id === 'jpg-to-pdf'
                       ? `Convert ${imageCards.length} ${imageCards.length === 1 ? 'Image' : 'Images'} to PDF`
                       : tool.id === 'compress'
@@ -1215,10 +1223,10 @@ export default function ToolModal({ tool, onClose }) {
           <div className="text-center py-6 space-y-4">
             <CheckCircle2 className="w-12 h-12 text-emerald-500 mx-auto" />
             <h4 className="text-lg font-bold text-slate-900">
-              {tool.id === 'rotate'
-                ? 'PDF Rotated Successfully!'
-                : tool.id === 'compress'
+              {tool.id === 'compress'
                 ? 'Compression Complete!'
+                : tool.id === 'rotate'
+                ? 'PDF Rotated Successfully!'
                 : tool.id === 'jpg-to-pdf'
                 ? 'Images Converted to PDF!'
                 : tool.id === 'word-to-pdf'
@@ -1229,6 +1237,8 @@ export default function ToolModal({ tool, onClose }) {
                 ? 'Excel Spreadsheet Converted to PDF!'
                 : tool.id === 'html-to-pdf'
                 ? 'HTML Converted to PDF!'
+                : tool.id === 'pdf-to-word'
+                ? 'PDF Converted to Word!'
                 : 'Processing Complete!'}
             </h4>
 
@@ -1280,7 +1290,7 @@ export default function ToolModal({ tool, onClose }) {
                 className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-medium shadow-md shadow-emerald-600/20 text-center flex items-center justify-center space-x-2 transition"
               >
                 <Download className="w-4 h-4" />
-                <span>Download PDF</span>
+                <span>Download {tool.id === 'pdf-to-word' ? 'Word Document' : 'File'}</span>
               </a>
             </div>
           </div>

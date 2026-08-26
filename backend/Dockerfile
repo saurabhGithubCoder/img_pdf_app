@@ -6,6 +6,8 @@ RUN apt-get update && apt-get install -y \
     tar \
     curl \
     build-essential \
+    python3 \
+    python3-pip \
     libreoffice \
     libreoffice-writer \
     libreoffice-calc \
@@ -15,6 +17,9 @@ RUN apt-get update && apt-get install -y \
     fonts-dejavu \
     --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
+
+# Install pdf2docx
+RUN pip3 install --no-cache-dir --break-system-packages pdf2docx
 
 WORKDIR /usr/src/app
 

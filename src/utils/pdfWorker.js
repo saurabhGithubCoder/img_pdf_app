@@ -836,3 +836,39 @@ export async function rotatePDF(file, options = 90) {
     filename: `rotated_${file.name}`,
   };
 }
+
+/**
+ * Convert PDF to editable Word document (.docx) using the backend service.
+ * @param {File} file - PDF document file
+ */
+export async function convertPdfToWord(file) {
+  const isLocked = await checkPdfPassword(file);
+  if (isLocked) {
+    const err = new Error(`Cannot process: "${file.name}" is password-protected.`);
+    err.lockedFiles = [file.name];
+    throw err;
+  }
+
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const response = await fetch('/api/convert/pdf-to-word', {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.error || 'Server failed to convert PDF to Word document.');
+  }
+
+  const docxBlob = await response.blob();
+  const baseName = file.name.replace(/\.[^/.]+$/, '');
+
+  return {
+    blob: docxBlob,
+    filename: `${baseName}.docx`,
+    originalSize: file.size,
+    compressedSize: docxBlob.size,
+  };
+}
