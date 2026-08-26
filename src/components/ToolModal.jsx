@@ -19,7 +19,8 @@ import {
   TrendingDown,
   RotateCcw,
   Image as ImageIcon,
-  Code
+  Code,
+  Info
 } from 'lucide-react';
 import {
   mergePDFs,
@@ -601,6 +602,35 @@ export default function ToolModal({ tool, onClose }) {
               </div>
             )}
 
+            {/* Custom Banner Notes for Tools */}
+            {tool.id === 'compress' && files.length > 0 && (
+              <div className="mb-4 p-3 bg-emerald-50/70 border border-emerald-200 rounded-2xl flex items-start space-x-2.5 text-xs text-emerald-900">
+                <Info className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                <p>We try our best to compress your PDF while preserving high visual quality and text clarity.</p>
+              </div>
+            )}
+
+            {tool.id === 'word-to-pdf' && files.length > 0 && (
+              <div className="mb-4 p-3 bg-blue-50/70 border border-blue-200 rounded-2xl flex items-start space-x-2.5 text-xs text-blue-900">
+                <Info className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+                <p>We try our best to convert your Word document to PDF maintaining an exact visual match and layout.</p>
+              </div>
+            )}
+
+            {tool.id === 'html-to-pdf' && (
+              <div className="mb-4 p-3 bg-amber-50/70 border border-amber-200 rounded-2xl flex items-start space-x-2.5 text-xs text-amber-900">
+                <Info className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <p><strong>Under Development:</strong> HTML conversion is actively being refined and may not capture complex external CSS/scripts accurately.</p>
+              </div>
+            )}
+
+            {['pdf-to-word', 'pdf-to-powerpoint', 'pdf-to-excel'].includes(tool.id) && files.length > 0 && (
+              <div className="mb-4 p-3 bg-amber-50/70 border border-amber-200 rounded-2xl flex items-start space-x-2.5 text-xs text-amber-900">
+                <Info className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <p><strong>Experimental Feature:</strong> This converter is under active development and testing. Complex vector layouts and tables may differ slightly from the source PDF.</p>
+              </div>
+            )}
+
             {tool.id === 'html-to-pdf' && htmlInputMode === 'code' ? (
               <div className="space-y-2">
                 <textarea
@@ -708,7 +738,6 @@ export default function ToolModal({ tool, onClose }) {
                           />
                         </div>
 
-                        {/* Top Rotate Overlay Button */}
                         <div className="absolute top-1.5 right-1.5 flex items-center space-x-1 opacity-95 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
                           <button
                             type="button"
@@ -720,7 +749,6 @@ export default function ToolModal({ tool, onClose }) {
                           </button>
                         </div>
 
-                        {/* Card Footer */}
                         <div className="px-2 py-1.5 bg-white border-t border-slate-100 flex items-center justify-between text-[10px] text-slate-500 font-semibold">
                           <span>Page {idx + 1}</span>
                           <span className={`${thumb.rotation !== 0 ? 'text-purple-600 font-bold' : 'text-slate-400'}`}>
@@ -762,7 +790,6 @@ export default function ToolModal({ tool, onClose }) {
                   <span>Order: Left to Right, Top to Bottom</span>
                 </div>
 
-                {/* Rearrangeable Images Grid */}
                 <div className="max-h-72 overflow-y-auto p-3 bg-slate-100/60 rounded-2xl border border-slate-200 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3.5">
                   {imageCards.map((card, idx) => (
                     <div
