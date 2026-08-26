@@ -1,58 +1,123 @@
-# it does not store files permanently on the disk.
+# 📄 PDF & Office Tool Suite
 
-Multer Configuration: multer.memoryStorage() keeps the incoming .docx file entirely in RAM as a temporary Node.js Buffer. No files are written to server folders or databases.
+A modern, high-performance web application and desktop suite for converting, manipulating, compressing, and organizing PDF documents and Office files. Built with a React + Vite frontend and an Express + Python backend engine.
 
-Conversion & Response: LibreOffice processes the in-memory stream, and Express immediately streams the output buffer back to the browser via res.send(pdfBuffer). Once the request finishes, the memory is released by Node.js garbage collection.
+---
 
-Client Handling: The browser converts the returned response into a temporary Blob URL in memory (URL.createObjectURL), which is revoked and cleared when the modal closes.
+## 🚀 Key Features
 
-# LibreOffice is required on Render because libreoffice-convert acts as a wrapper around the system CLI (libreoffice --headless). Without the binary installed on the host OS, conversions will fail with spawn libreoffice ENOENT.
+* **PDF to Word (.docx / .doc):** High-fidelity document reconstruction preserving fonts, sizes, tables, and alignment without OpenXML schema corruption.
+* **PDF to PowerPoint (.pptx):** Slide-by-slide conversion retaining layout boundaries.
+* **PDF to Excel (.xlsx):** Structured table and data extraction directly into clean `.xlsx` workbooks.
+* **Office to PDF:** Direct conversion of Word (`.docx`, `.doc`), PowerPoint (`.pptx`, `.ppt`), Excel (`.xlsx`, `.xls`), and HTML (`.html`) files to PDF.
+* **Interactive PDF Tools:**
+  * **Visual Page Organizer:** Drag-and-drop page reordering with individual page rotation.
+  * **Batch Rotate:** Interactive single-page and full-document rotation ($90^\circ$, $-90^\circ$, $180^\circ$).
+  * **Split & Merge:** Combine multiple PDFs or split documents by custom page ranges.
+  * **Remove & Extract Pages:** Visual page grid selector to delete or isolate specific pages.
+  * **Images to PDF & PDF to JPG:** Convert image collections (JPG, PNG, WebP) to PDF or extract PDF pages as images.
+  * **Smart PDF Compression:** Quality-preserving compression with before-and-after file size metrics.
 
-Because Render's default native Node runtime does not allow sudo apt-get install, the standard way to deploy this to Render is using a Dockerfile (Docker Web Service).
+---
 
-How to deploy on Render using Docker
-Create a Dockerfile in your backend/ directory:
+## 🛠 Tech Stack
 
-``
-FROM node:20-slim
+* **Frontend:** React 18, Vite, Tailwind CSS, Lucide React, PDF-Lib, PDF.js
+* **Backend:** Node.js, Express, Multer, Child Process CLI Orchestration
+* **Engines & Parsers:** Python 3 (`PyMuPDF`, `python-docx`, `pdfplumber`, `openpyxl`), LibreOffice (Headless), Ghostscript, Poppler-Utils
 
-## libreoffice for local 
-sudo apt-get update && sudo apt-get install -y libreoffice
+---
 
-## libreoffice ghost script for compression of pdf 
-sudo apt-get update && sudo apt-get install -y ghostscript
+## 📂 Repository Structure
 
-# Install LibreOffice and minimal fonts for rendering
-RUN apt-get update && apt-get install -y \
+```text
+├── backend/
+│   ├── convert_pdf2docx.py      # Python engine for PDF/DOC to DOCX reconstruction
+│   ├── convert_pdf2excel.py     # Python engine for PDF to XLSX table extraction
+│   ├── Dockerfile               # Container deployment configuration for backend
+│   ├── package.json             # Backend dependencies
+│   └── server.js                # Express API endpoints & file conversion pipeline
+├── src/
+│   ├── components/
+│   │   ├── ToolCard.jsx         # Tool card UI component
+│   │   └── ToolModal.jsx        # Interactive modal & page workspace
+│   ├── utils/
+│   │   └── pdfWorker.js         # Client-side processing & backend API client
+│   ├── App.jsx                  # Main dashboard layout
+│   ├── index.css                # Global Tailwind CSS styles
+│   └── main.jsx                 # Application entry point
+├── .env.production              # Production API base URL configuration
+├── index.html                   # HTML entry page
+├── package.json                 # Frontend dependencies & deployment scripts
+├── tailwind.config.js           # Tailwind CSS configuration
+└── vite.config.js               # Vite build configuration
+
+```
+
+💻 Local Setup & Installation
+Prerequisites
+Ensure you have the following installed on your machine:
+
+1. Node.js: v18+ or v20+
+
+2. Python: 3.10+ with pip
+
+3. System Packages (Linux / Debian / Codespaces):
+
+```
+sudo apt-get update && sudo apt-get install -y \
     libreoffice \
-    libreoffice-writer \
-    fonts-liberation \
-    fonts-dejavu \
-    --no-install-recommends \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /usr/src/app
-
-COPY package*.json ./
-RUN npm install --production
-
-COPY . .
-
-EXPOSE 5000
-CMD ["node", "server.js"]
-``
-
------- ghostscript -----
-RUN apt-get update && apt-get install -y \
-    libreoffice \
-    libreoffice-writer \
     ghostscript \
-    fonts-liberation \
-    fonts-dejavu \
-    --no-install-recommends \
-    && rm -rf /var/lib/apt/lists/*
+    poppler-utils \
+    bzip2 \
+    tar \
+    build-essential
+```
 
-## Steps to Deploy:
-1. Frontend (Vite): Deploy your React app as a Static Site on Render. Set VITE_API_BASE_URL (or update your API fetch URL) to point to your live backend service URL instead of /api.
+1. Backend setup
+```
+# Navigate to the backend directory
+cd backend
 
-2. Backend: In Render, create a new Web Service, link your repository, set the Runtime to Docker, and point the root directory to your backend/ folder. Render will build the container with LibreOffice installed automatically.
+# Install Node dependencies
+npm install
+
+# Install required Python layout and parsing libraries
+pip3 install --upgrade pymupdf python-docx pdfplumber openpyxl
+
+# Start the backend server (runs on http://localhost:5000)
+node server.js
+```
+
+2. Frontend setup
+```
+# Navigate to the project root
+cd ..
+
+# Install frontend dependencies
+npm install
+
+# Start the Vite development server (runs on http://localhost:5173)
+npm run dev
+```
+🐳 Docker Deployment (Render / Cloud Containers)
+Build and run the self-contained backend container:
+```
+# Build the backend container image
+docker build -t pdf-tools-backend ./backend
+
+# Run the container exposing port 5000
+docker run -p 5000:5000 pdf-tools-backend
+```
+
+🌐 Production Hosting Setup
+Backend (Render): Deploy the backend/ directory as a Docker Web Service. Render binds to port 5000 automatically.
+
+Frontend (GitHub Pages / Vercel): Set VITE_API_BASE_URL=https://<your-backend-domain>.onrender.com in .env.production and deploy using npm run build.
+
+🔒 Security & Processing Architecture
+Stateless & Ephemeral Storage: All uploaded and generated files are stored in temporary memory/disk locations and deleted immediately after the response stream closes.
+
+Password Verification: Encrypted files are validated prior to execution to prevent process deadlocks.
+
+Valid OpenXML Generation: Document models are synthesized strictly within Microsoft OpenXML standards to eliminate corrupt file warnings.
