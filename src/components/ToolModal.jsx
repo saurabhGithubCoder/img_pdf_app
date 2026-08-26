@@ -40,7 +40,7 @@ import {
   checkPptxPassword,
   convertHtmlToPDF,
   convertExcelToPDF,
-  checkExcelPassword
+  checkExcelPassword,
 } from '../utils/pdfWorker';
 
 export default function ToolModal({ tool, onClose }) {
@@ -61,8 +61,13 @@ export default function ToolModal({ tool, onClose }) {
   const [htmlInputMode, setHtmlInputMode] = useState('file'); // 'file' | 'code'
   const [rawHtmlCode, setRawHtmlCode] = useState('');
 
-  // Page-selector specific state ('remove', 'extract', 'organize')
-  const isPageLevelTool = tool.id === 'remove' || tool.id === 'extract' || tool.id === 'organize';
+  // Page-selector & Visual tools ('remove', 'extract', 'organize', 'rotate')
+  const isPageLevelTool =
+    tool.id === 'remove' ||
+    tool.id === 'extract' ||
+    tool.id === 'organize' ||
+    tool.id === 'rotate';
+
   const [thumbnails, setThumbnails] = useState([]);
   const [totalPages, setTotalPages] = useState(0);
   const [isRenderingPages, setIsRenderingPages] = useState(false);
@@ -182,6 +187,7 @@ export default function ToolModal({ tool, onClose }) {
     }
   };
 
+  // Image Reordering Handlers for JPG to PDF
   const handleImageDragStart = (e, index) => {
     setDraggedImageIndex(index);
     e.dataTransfer.effectAllowed = 'move';
@@ -216,6 +222,7 @@ export default function ToolModal({ tool, onClose }) {
     setFiles(updated.map((c) => c.file));
   };
 
+  // PDF Page Organizing Handlers
   const handlePageDragStart = (e, index) => {
     setDraggedPageIndex(index);
     e.dataTransfer.effectAllowed = 'move';
@@ -238,9 +245,17 @@ export default function ToolModal({ tool, onClose }) {
     setDraggedPageIndex(null);
   };
 
-  const rotateSinglePage = (index) => {
+  const rotateSinglePage = (index, delta = 90) => {
     const updated = [...thumbnails];
-    updated[index].rotation = (updated[index].rotation + 90) % 360;
+    updated[index].rotation = (updated[index].rotation + delta + 360) % 360;
+    setThumbnails(updated);
+  };
+
+  const rotateAllPages = (delta = 90) => {
+    const updated = thumbnails.map((thumb) => ({
+      ...thumb,
+      rotation: (thumb.rotation + delta + 360) % 360
+    }));
     setThumbnails(updated);
   };
 
@@ -379,6 +394,9 @@ export default function ToolModal({ tool, onClose }) {
       let output;
 
       switch (tool.id) {
+        case 'rotate':
+          output = await rotatePDF(files[0], thumbnails);
+          break;
         case 'excel-to-pdf':
           output = await convertExcelToPDF(files[0]);
           break;
@@ -411,9 +429,6 @@ export default function ToolModal({ tool, onClose }) {
           break;
         case 'split':
           output = await splitPDF(files[0]);
-          break;
-        case 'rotate':
-          output = await rotatePDF(files[0]);
           break;
         case 'pdf-to-jpg':
           output = await pdfToJpg(files[0]);
@@ -478,6 +493,17 @@ export default function ToolModal({ tool, onClose }) {
     return 'PDFs';
   };
 
+  const isConvertingTool = [
+    'word-to-pdf',
+    'powerpoint-to-pdf',
+    'excel-to-pdf',
+    'html-to-pdf',
+    'pdf-to-word',
+    'pdf-to-jpg',
+    'to-markdown',
+    'jpg-to-pdf'
+  ].includes(tool.id);
+
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
       <div className={`bg-white rounded-3xl w-full p-6 sm:p-8 shadow-2xl border border-slate-100 relative animate-in fade-in zoom-in-95 duration-150 ${
@@ -496,11 +522,7 @@ export default function ToolModal({ tool, onClose }) {
           </div>
           <div>
             <h3 className="text-lg font-bold text-slate-900">{tool.name}</h3>
-            <p className="text-xs text-slate-500">
-              {['word-to-pdf', 'powerpoint-to-pdf', 'excel-to-pdf', 'html-to-pdf'].includes(tool.id)
-                ? 'LibreOffice Engine Workspace'
-                : 'Client-Side Secure Workspace'}
-            </p>
+            <p className="text-xs text-slate-500">Secure File Workspace</p>
           </div>
         </div>
 
@@ -603,6 +625,93 @@ export default function ToolModal({ tool, onClose }) {
                 </label>
               </div>
             ) : null}
+
+            {/* Custom Interactive Workspace for Rotate PDF */}
+            {tool.id === 'rotate' && files.length > 0 && (
+              <div className="space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 bg-purple-50/80 rounded-2xl border border-purple-200 text-xs">
+                  <div className="flex items-center space-x-2 truncate">
+                    <FileText className="w-4 h-4 text-purple-600 shrink-0" />
+                    <span className="font-semibold text-purple-950 truncate">{files[0].name}</span>
+                    <span className="text-purple-600 font-medium">({thumbnails.length} pages)</span>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <button
+                      type="button"
+                      onClick={() => rotateAllPages(90)}
+                      className="px-2.5 py-1.5 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-medium transition flex items-center space-x-1 shadow-sm"
+                    >
+                      <RotateCw className="w-3.5 h-3.5" />
+                      <span>Rotate All 90°</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => rotateAllPages(-90)}
+                      className="px-2.5 py-1.5 bg-white hover:bg-purple-100/60 text-purple-700 border border-purple-300 rounded-lg font-medium transition flex items-center space-x-1"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      <span>-90°</span>
+                    </button>
+                    <button
+                      onClick={() => removeFileItem(0)}
+                      className="text-purple-700 hover:text-purple-900 font-medium pl-1"
+                    >
+                      Change
+                    </button>
+                  </div>
+                </div>
+
+                <div className="text-xs text-slate-500 font-medium flex items-center justify-between">
+                  <span>Click page buttons to rotate individual pages, or rotate all above.</span>
+                  <span>{thumbnails.length} Pages</span>
+                </div>
+
+                {isRenderingPages ? (
+                  <div className="py-12 text-center text-slate-400 space-y-2">
+                    <Loader2 className="w-7 h-7 animate-spin mx-auto text-purple-500" />
+                    <p className="text-xs">Generating page previews...</p>
+                  </div>
+                ) : (
+                  <div className="max-h-72 overflow-y-auto p-3 bg-slate-100/60 rounded-2xl border border-slate-200 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3.5">
+                    {thumbnails.map((thumb, idx) => (
+                      <div
+                        key={thumb.id}
+                        className="group relative rounded-xl border-2 bg-white shadow-sm overflow-hidden border-slate-200 hover:border-purple-400 hover:shadow-md transition-all"
+                      >
+                        <div className="p-2 flex items-center justify-center min-h-[140px] bg-slate-50">
+                          <img
+                            src={thumb.dataUrl}
+                            alt={`Page ${idx + 1}`}
+                            style={{ transform: `rotate(${thumb.rotation}deg)` }}
+                            className="max-h-32 object-contain transition-transform duration-200"
+                          />
+                        </div>
+
+                        {/* Top Rotate Overlay Button */}
+                        <div className="absolute top-1.5 right-1.5 flex items-center space-x-1 opacity-95 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+                          <button
+                            type="button"
+                            onClick={() => rotateSinglePage(idx, 90)}
+                            className="p-1.5 bg-white/95 hover:bg-white text-slate-700 rounded-lg shadow hover:text-purple-600 transition"
+                            title="Rotate 90° Clockwise"
+                          >
+                            <RotateCw className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+
+                        {/* Card Footer */}
+                        <div className="px-2 py-1.5 bg-white border-t border-slate-100 flex items-center justify-between text-[10px] text-slate-500 font-semibold">
+                          <span>Page {idx + 1}</span>
+                          <span className={`${thumb.rotation !== 0 ? 'text-purple-600 font-bold' : 'text-slate-400'}`}>
+                            {thumb.rotation}°
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Custom Interactive Workspace for JPG to PDF */}
             {tool.id === 'jpg-to-pdf' && imageCards.length > 0 && (
@@ -1039,7 +1148,7 @@ export default function ToolModal({ tool, onClose }) {
                 (tool.id === 'merge' && files.length < 2) ||
                 ((tool.id === 'remove' || tool.id === 'extract') && selectedPages.size === 0) ||
                 (tool.id === 'remove' && selectedPages.size >= totalPages) ||
-                (tool.id === 'organize' && thumbnails.length === 0) ||
+                ((tool.id === 'organize' || tool.id === 'rotate') && thumbnails.length === 0) ||
                 isProcessing ||
                 isRenderingPages
               }
@@ -1053,22 +1162,29 @@ export default function ToolModal({ tool, onClose }) {
                   : tool.id === 'excel-to-pdf'
                   ? 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/20'
                   : tool.id === 'html-to-pdf'
-                  ? 'bg-amber-600 hover:bg-amber-700 shadow-amber-600/20'
+                  ? 'bg-blue-600 hover:bg-blue-700 shadow-blue-600/20'
+                  : tool.id === 'rotate'
+                  ? 'bg-purple-600 hover:bg-purple-700 shadow-purple-600/20'
                   : 'bg-rose-500 hover:bg-rose-600 shadow-rose-500/20'
               }`}
             >
               {isProcessing ? (
-                <span className="text-sm">
-                  {['word-to-pdf', 'powerpoint-to-pdf', 'excel-to-pdf', 'html-to-pdf'].includes(tool.id)
-                    ? 'Converting via LibreOffice...'
-                    : tool.id === 'compress'
-                    ? 'Compressing via Ghostscript Engine...'
-                    : 'Processing in browser...'}
-                </span>
+                <div className="flex items-center space-x-2">
+                  <Loader2 className="w-4 h-4 animate-spin text-white" />
+                  <span className="text-sm font-medium">
+                    {tool.id === 'compress'
+                      ? 'Compressing file...'
+                      : isConvertingTool
+                      ? 'Converting your file...'
+                      : 'Processing file...'}
+                  </span>
+                </div>
               ) : (
                 <>
-                  <span className="text-sm">
-                    {tool.id === 'excel-to-pdf'
+                  <span className="text-sm font-medium">
+                    {tool.id === 'rotate'
+                      ? `Save Rotated PDF (${thumbnails.length} Pages)`
+                      : tool.id === 'excel-to-pdf'
                       ? 'Convert EXCEL to PDF'
                       : tool.id === 'html-to-pdf'
                       ? 'Convert HTML to PDF'
@@ -1099,7 +1215,9 @@ export default function ToolModal({ tool, onClose }) {
           <div className="text-center py-6 space-y-4">
             <CheckCircle2 className="w-12 h-12 text-emerald-500 mx-auto" />
             <h4 className="text-lg font-bold text-slate-900">
-              {tool.id === 'compress'
+              {tool.id === 'rotate'
+                ? 'PDF Rotated Successfully!'
+                : tool.id === 'compress'
                 ? 'Compression Complete!'
                 : tool.id === 'jpg-to-pdf'
                 ? 'Images Converted to PDF!'

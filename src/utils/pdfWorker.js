@@ -2,7 +2,7 @@ import { PDFDocument, degrees } from 'pdf-lib';
 import * as pdfjsLib from 'pdfjs-dist';
 import JSZip from 'jszip';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
+//const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
 
 // Configure pdfjs worker
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
@@ -49,8 +49,8 @@ export async function compressPDF(file, compressionLevel = 45) {
   formData.append('file', file);
   formData.append('compressionPercent', compressionLevel.toString());
 
-  //const response = await fetch('/api/compress-pdf', {
-  const response = await fetch(`${API_BASE_URL}/api/compress-pdf`, {
+  const response = await fetch('/api/compress-pdf', {
+  //const response = await fetch(`${API_BASE_URL}/api/compress-pdf`, {
     method: 'POST',
     body: formData,
   });
@@ -318,7 +318,7 @@ export async function splitPDF(file) {
 /**
  * Rotate all pages in a PDF by 90 degrees clockwise.
  */
-export async function rotatePDF(file, angle = 90) {
+/*export async function rotatePDF(file, angle = 90) {
   const pdfDoc = await loadPdfSafely(file);
   const pages = pdfDoc.getPages();
 
@@ -332,7 +332,7 @@ export async function rotatePDF(file, angle = 90) {
     blob: new Blob([bytes], { type: 'application/pdf' }),
     filename: `rotated_${file.name}`
   };
-}
+}*/
 
 /**
  * Convert JPG/PNG Images into a single PDF.
@@ -525,8 +525,8 @@ export async function convertWordToPDF(file) {
   const formData = new FormData();
   formData.append('file', file);
 
-  //const response = await fetch('/api/convert/word-to-pdf', {
-  const response = await fetch(`${API_BASE_URL}/api/convert/word-to-pdf`, {
+  const response = await fetch('/api/convert/word-to-pdf', {
+  //const response = await fetch(`${API_BASE_URL}/api/convert/word-to-pdf`, {
     method: 'POST',
     body: formData,
   });
@@ -628,8 +628,8 @@ export async function convertPowerpointToPDF(file) {
   const formData = new FormData();
   formData.append('file', file);
 
-  //const response = await fetch('/api/convert/powerpoint-to-pdf', {
-  const response = await fetch(`${API_BASE_URL}/api/convert/powerpoint-to-pdf`, {
+  const response = await fetch('/api/convert/powerpoint-to-pdf', {
+  //const response = await fetch(`${API_BASE_URL}/api/convert/powerpoint-to-pdf`, {
     method: 'POST',
     body: formData,
   });
@@ -663,8 +663,8 @@ export async function convertHtmlToPDF(input) {
   let response;
 
   if (typeof input === 'string') {
-    //response = await fetch('/api/convert/html-to-pdf', {
-    response = await fetch(`${API_BASE_URL}/api/convert/html-to-pdf`, {
+    response = await fetch('/api/convert/html-to-pdf', {
+    /*response = await fetch(`${API_BASE_URL}/api/convert/html-to-pdf`, {*/
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ html: input }),
@@ -673,8 +673,8 @@ export async function convertHtmlToPDF(input) {
     const formData = new FormData();
     formData.append('file', input);
 
-    //response = await fetch('/api/convert/html-to-pdf', {
-    response = await fetch(`${API_BASE_URL}/api/convert/html-to-pdf`, {
+    response = await fetch('/api/convert/html-to-pdf', {
+    //response = await fetch(`${API_BASE_URL}/api/convert/html-to-pdf`, {
       method: 'POST',
       body: formData,
     });
@@ -768,8 +768,8 @@ export async function convertExcelToPDF(file) {
   const formData = new FormData();
   formData.append('file', file);
 
-  //const response = await fetch('/api/convert/excel-to-pdf', {
-  const response = await fetch(`${API_BASE_URL}/api/convert/excel-to-pdf`, {
+  const response = await fetch('/api/convert/excel-to-pdf', {
+  //const response = await fetch(`${API_BASE_URL}/api/convert/excel-to-pdf`, {
     method: 'POST',
     body: formData,
   });
@@ -792,5 +792,47 @@ export async function convertExcelToPDF(file) {
     filename: `${baseName}.pdf`,
     originalSize: file.size,
     compressedSize: pdfBlob.size,
+  };
+}
+
+/**
+ * Rotate PDF pages.
+ * Supports both a single global angle or an array of page items with custom rotation per page.
+ * @param {File} file - PDF file
+ * @param {number|Array} options - Global rotation angle (e.g. 90) OR Array of page items [{ pageNumber, rotation }]
+ */
+export async function rotatePDF(file, options = 90) {
+  const isLocked = await checkPdfPassword(file);
+  if (isLocked) {
+    const err = new Error(`"${file.name}" is password-protected and cannot be processed.`);
+    err.lockedFiles = [file.name];
+    throw err;
+  }
+
+  const arrayBuffer = await file.arrayBuffer();
+  const pdfDoc = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
+  const pages = pdfDoc.getPages();
+
+  if (Array.isArray(options)) {
+    // Apply per-page custom rotation
+    options.forEach((item, index) => {
+      if (pages[index] && item.rotation !== 0) {
+        const currentRotation = pages[index].getRotation().angle;
+        pages[index].setRotation(degrees((currentRotation + item.rotation) % 360));
+      }
+    });
+  } else {
+    // Apply global uniform angle across all pages
+    const angle = typeof options === 'number' ? options : 90;
+    pages.forEach((page) => {
+      const currentRotation = page.getRotation().angle;
+      page.setRotation(degrees((currentRotation + angle) % 360));
+    });
+  }
+
+  const bytes = await pdfDoc.save({ useObjectStreams: true });
+  return {
+    blob: new Blob([bytes], { type: 'application/pdf' }),
+    filename: `rotated_${file.name}`,
   };
 }
