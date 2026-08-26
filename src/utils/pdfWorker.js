@@ -2,7 +2,7 @@ import { PDFDocument, degrees } from 'pdf-lib';
 import * as pdfjsLib from 'pdfjs-dist';
 import JSZip from 'jszip';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
+//const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
 
 // Configure pdfjs worker
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
@@ -49,8 +49,8 @@ export async function compressPDF(file, compressionLevel = 45) {
   formData.append('file', file);
   formData.append('compressionPercent', compressionLevel.toString());
 
-  //const response = await fetch('/api/compress-pdf', {
-  const response = await fetch(`${API_BASE_URL}/api/compress-pdf`, {
+  const response = await fetch('/api/compress-pdf', {
+  //const response = await fetch(`${API_BASE_URL}/api/compress-pdf`, {
     method: 'POST',
     body: formData,
   });
@@ -525,8 +525,8 @@ export async function convertWordToPDF(file) {
   const formData = new FormData();
   formData.append('file', file);
 
-  //const response = await fetch('/api/convert/word-to-pdf', {
-  const response = await fetch(`${API_BASE_URL}/api/convert/word-to-pdf`, {
+  const response = await fetch('/api/convert/word-to-pdf', {
+  //const response = await fetch(`${API_BASE_URL}/api/convert/word-to-pdf`, {
     method: 'POST',
     body: formData,
   });
@@ -628,8 +628,8 @@ export async function convertPowerpointToPDF(file) {
   const formData = new FormData();
   formData.append('file', file);
 
-  //const response = await fetch('/api/convert/powerpoint-to-pdf', {
-  const response = await fetch(`${API_BASE_URL}/api/convert/powerpoint-to-pdf`, {
+  const response = await fetch('/api/convert/powerpoint-to-pdf', {
+  //const response = await fetch(`${API_BASE_URL}/api/convert/powerpoint-to-pdf`, {
     method: 'POST',
     body: formData,
   });
@@ -663,8 +663,8 @@ export async function convertHtmlToPDF(input) {
   let response;
 
   if (typeof input === 'string') {
-    //response = await fetch('/api/convert/html-to-pdf', {
-    response = await fetch(`${API_BASE_URL}/api/convert/html-to-pdf`, {
+    response = await fetch('/api/convert/html-to-pdf', {
+    //response = await fetch(`${API_BASE_URL}/api/convert/html-to-pdf`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ html: input }),
@@ -673,8 +673,8 @@ export async function convertHtmlToPDF(input) {
     const formData = new FormData();
     formData.append('file', input);
 
-    //response = await fetch('/api/convert/html-to-pdf', {
-    response = await fetch(`${API_BASE_URL}/api/convert/html-to-pdf`, {
+    response = await fetch('/api/convert/html-to-pdf', {
+    //response = await fetch(`${API_BASE_URL}/api/convert/html-to-pdf`, {
       method: 'POST',
       body: formData,
     });
@@ -768,8 +768,8 @@ export async function convertExcelToPDF(file) {
   const formData = new FormData();
   formData.append('file', file);
 
-  //const response = await fetch('/api/convert/excel-to-pdf', {
-  const response = await fetch(`${API_BASE_URL}/api/convert/excel-to-pdf`, {
+  const response = await fetch('/api/convert/excel-to-pdf', {
+  //const response = await fetch(`${API_BASE_URL}/api/convert/excel-to-pdf`, {
     method: 'POST',
     body: formData,
   });
@@ -852,8 +852,8 @@ export async function convertPdfToWord(file) {
   const formData = new FormData();
   formData.append('file', file);
 
-  //const response = await fetch('/api/convert/pdf-to-word', {
-  const response = await fetch(`${API_BASE_URL}/api/convert/pdf-to-word`, {
+  const response = await fetch('/api/convert/pdf-to-word', {
+  //const response = await fetch(`${API_BASE_URL}/api/convert/pdf-to-word`, {
     method: 'POST',
     body: formData,
   });
@@ -889,8 +889,8 @@ export async function convertPdfToPowerpoint(file) {
   const formData = new FormData();
   formData.append('file', file);
   
-  const response = await fetch(`${API_BASE_URL}/api/convert/pdf-to-powerpoint`, {
-  //const response = await fetch('/api/convert/pdf-to-powerpoint', {
+  //const response = await fetch(`${API_BASE_URL}/api/convert/pdf-to-powerpoint`, {
+  const response = await fetch('/api/convert/pdf-to-powerpoint', {
     method: 'POST',
     body: formData,
   });
@@ -926,8 +926,8 @@ export async function convertPdfToExcel(file) {
   const formData = new FormData();
   formData.append('file', file);
 
-  //const response = await fetch('/api/convert/pdf-to-excel', {
-  const response = await fetch(`${API_BASE_URL}/api/convert/pdf-to-excel`, {
+  const response = await fetch('/api/convert/pdf-to-excel', {
+  //const response = await fetch(`${API_BASE_URL}/api/convert/pdf-to-excel`, {
     method: 'POST',
     body: formData,
   });
@@ -945,5 +945,154 @@ export async function convertPdfToExcel(file) {
     filename: `${baseName}.xlsx`,
     originalSize: file.size,
     compressedSize: xlsxBlob.size,
+  };
+}
+
+import { rgb, StandardFonts } from 'pdf-lib';
+
+/**
+ * Add customizable page numbers to a PDF document.
+ * @param {File} file - Source PDF file
+ * @param {Object} options - Numbering layout options
+ */
+export async function addPageNumbersToPDF(file, options) {
+  const isLocked = await checkPdfPassword(file);
+  if (isLocked) {
+    const err = new Error(`Cannot process: "${file.name}" is password-protected or encrypted.`);
+    err.lockedFiles = [file.name];
+    throw err;
+  }
+
+  const {
+    position = 'bottom-right',
+    margin = 'recommended',
+    pageMode = 'single',
+    firstNumber = 1,
+    fromPage = 1,
+    toPage = 1,
+    textPreset = 'number-only',
+    customText = 'Page {n} of {p}',
+    fontSize = 10,
+    fontFamily = 'Helvetica',
+    isBold = false,
+    isItalic = false,
+    isUnderline = false,
+    color = '#4A5568',
+  } = options;
+
+  const arrayBuffer = await file.arrayBuffer();
+  const pdfDoc = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
+  const totalPages = pdfDoc.getPageCount();
+
+  // Load standard font styles
+  let fontRef;
+  if (fontFamily === 'Times') {
+    if (isBold && isItalic) fontRef = await pdfDoc.embedFont(StandardFonts.TimesRomanBoldItalic);
+    else if (isBold) fontRef = await pdfDoc.embedFont(StandardFonts.TimesRomanBold);
+    else if (isItalic) fontRef = await pdfDoc.embedFont(StandardFonts.TimesRomanItalic);
+    else fontRef = await pdfDoc.embedFont(StandardFonts.TimesRoman);
+  } else if (fontFamily === 'Courier') {
+    if (isBold && isItalic) fontRef = await pdfDoc.embedFont(StandardFonts.CourierBoldOblique);
+    else if (isBold) fontRef = await pdfDoc.embedFont(StandardFonts.CourierBold);
+    else if (isItalic) fontRef = await pdfDoc.embedFont(StandardFonts.CourierOblique);
+    else fontRef = await pdfDoc.embedFont(StandardFonts.Courier);
+  } else {
+    if (isBold && isItalic) fontRef = await pdfDoc.embedFont(StandardFonts.HelveticaBoldOblique);
+    else if (isBold) fontRef = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+    else if (isItalic) fontRef = await pdfDoc.embedFont(StandardFonts.HelveticaOblique);
+    else fontRef = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  }
+
+  // Margin in points (72 points = 1 inch)
+  let marginPt = 36; // recommended (~0.5 in)
+  if (margin === 'small') marginPt = 20;
+  if (margin === 'large') marginPt = 54;
+
+  // Parse RGB
+  const hex = color.replace('#', '');
+  const r = parseInt(hex.substring(0, 2), 16) / 255 || 0.2;
+  const g = parseInt(hex.substring(2, 4), 16) / 255 || 0.2;
+  const b = parseInt(hex.substring(4, 6), 16) / 255 || 0.2;
+  const textColor = rgb(r, g, b);
+
+  const startPage = Math.max(1, Math.min(fromPage, totalPages));
+  const endPage = Math.min(totalPages, Math.max(startPage, toPage));
+
+  for (let i = startPage - 1; i <= endPage - 1; i++) {
+    const page = pdfDoc.getPage(i);
+    const { width, height } = page.getSize();
+    const currentNumber = firstNumber + (i - (startPage - 1));
+
+    // Construct text string
+    let label = `${currentNumber}`;
+    if (textPreset === 'page-n') {
+      label = `Page ${currentNumber}`;
+    } else if (textPreset === 'page-n-of-p') {
+      label = `Page ${currentNumber} of ${totalPages}`;
+    } else if (textPreset === 'custom') {
+      label = customText
+        .replace(/{n}/g, `${currentNumber}`)
+        .replace(/{p}/g, `${totalPages}`);
+    }
+
+    const textWidth = fontRef.widthOfTextAtSize(label, fontSize);
+    const textHeight = fontRef.heightAtSize(fontSize);
+
+    // Resolve active horizontal / vertical alignments
+    let activePos = position;
+    if (pageMode === 'facing') {
+      const isEven = (i + 1) % 2 === 0;
+      if (position.includes('right') && isEven) {
+        activePos = position.replace('right', 'left');
+      } else if (position.includes('left') && isEven) {
+        activePos = position.replace('left', 'right');
+      }
+    }
+
+    let x = marginPt;
+    let y = marginPt;
+
+    // Horizontal coordinates
+    if (activePos.includes('left')) {
+      x = marginPt;
+    } else if (activePos.includes('center')) {
+      x = (width - textWidth) / 2;
+    } else if (activePos.includes('right')) {
+      x = width - marginPt - textWidth;
+    }
+
+    // Vertical coordinates
+    if (activePos.startsWith('top')) {
+      y = height - marginPt - textHeight;
+    } else if (activePos.startsWith('middle')) {
+      y = (height - textHeight) / 2;
+    } else if (activePos.startsWith('bottom')) {
+      y = marginPt;
+    }
+
+    page.drawText(label, {
+      x,
+      y,
+      size: fontSize,
+      font: fontRef,
+      color: textColor,
+    });
+
+    if (isUnderline) {
+      page.drawLine({
+        start: { x, y: y - 2 },
+        end: { x: x + textWidth, y: y - 2 },
+        thickness: 0.8,
+        color: textColor,
+      });
+    }
+  }
+
+  const pdfBytes = await pdfDoc.save({ useObjectStreams: true });
+  return {
+    blob: new Blob([pdfBytes], { type: 'application/pdf' }),
+    filename: `numbered_${file.name}`,
+    originalSize: file.size,
+    compressedSize: pdfBytes.byteLength,
   };
 }

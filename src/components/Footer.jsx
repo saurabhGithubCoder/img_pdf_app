@@ -59,7 +59,7 @@ export default function Footer() {
           <p>© {new Date().getFullYear()} PDFForge. Open-source under MIT License.</p>
           <div className="flex items-center space-x-6">
             <a
-              href="https://github.com"
+              href="https://github.com/saurabhpan98/pdf-forge"
               target="_blank"
               rel="noopener noreferrer"
               className="hover:text-slate-400 flex items-center space-x-1.5 transition"

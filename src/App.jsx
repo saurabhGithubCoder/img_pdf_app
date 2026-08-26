@@ -2,14 +2,16 @@ import React, { useState, useMemo } from 'react';
 import Header from './components/Header';
 import ToolCard from './components/ToolCard';
 import ToolModal from './components/ToolModal';
+import ToolStudio from './components/ToolStudio';
 import Reviews from './components/Reviews';
 import Footer from './components/Footer';
 import { PDF_CATEGORIES } from './data/pdfTools';
-import { Search, ShieldCheck, Lock, Sparkles, Server } from 'lucide-react';
+import { Search, Lock, Sparkles, Server } from 'lucide-react';
 
 export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
-  const [activeTool, setActiveTool] = useState(null);
+  const [activeModalTool, setActiveModalTool] = useState(null);
+  const [activeStudioSession, setActiveStudioSession] = useState(null);
 
   const filteredCategories = useMemo(() => {
     if (!searchQuery.trim()) return PDF_CATEGORIES;
@@ -24,10 +26,41 @@ export default function App() {
     })).filter((category) => category.tools.length > 0);
   }, [searchQuery]);
 
+  const handleLaunchStudio = (tool, sessionData) => {
+    setActiveModalTool(null);
+    setActiveStudioSession({
+      tool,
+      files: sessionData.files || [],
+      imageCards: sessionData.imageCards || [],
+      htmlCode: sessionData.htmlCode || '',
+      htmlMode: sessionData.htmlMode || 'file'
+    });
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleBackToHome = () => {
+    setActiveStudioSession(null);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  // If a tool session is active, render the dedicated full-screen studio
+  if (activeStudioSession) {
+    return (
+      <ToolStudio
+        tool={activeStudioSession.tool}
+        initialFiles={activeStudioSession.files}
+        initialImageCards={activeStudioSession.imageCards}
+        initialHtmlCode={activeStudioSession.htmlCode}
+        initialHtmlMode={activeStudioSession.htmlMode}
+        onBack={handleBackToHome}
+      />
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 font-sans antialiased flex flex-col justify-between">
       <div>
-        <Header onSelectTool={(tool) => setActiveTool(tool)} />
+        <Header onSelectTool={(tool) => setActiveModalTool(tool)} />
 
         {/* Hero Section */}
         <section className="py-14 px-4 sm:px-6 lg:px-8 max-w-5xl mx-auto text-center">
@@ -82,7 +115,7 @@ export default function App() {
                   <ToolCard
                     key={tool.id}
                     tool={tool}
-                    onSelect={(selected) => setActiveTool(selected)}
+                    onSelect={(selected) => setActiveModalTool(selected)}
                   />
                 ))}
               </div>
@@ -90,16 +123,18 @@ export default function App() {
           ))}
         </main>
 
-        {/* Customer Reviews Section */}
         <Reviews />
       </div>
 
-      {/* Footer */}
       <Footer />
 
-      {/* Action Modal */}
-      {activeTool && (
-        <ToolModal tool={activeTool} onClose={() => setActiveTool(null)} />
+      {/* Upload & Security Modal */}
+      {activeModalTool && (
+        <ToolModal
+          tool={activeModalTool}
+          onClose={() => setActiveModalTool(null)}
+          onLaunchStudio={handleLaunchStudio}
+        />
       )}
     </div>
   );

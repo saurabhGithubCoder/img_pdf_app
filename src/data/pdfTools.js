@@ -76,7 +76,7 @@ export const PDF_CATEGORIES = [
     title: 'Edit PDF',
     tools: [
       { id: 'rotate', name: 'Rotate PDF', desc: 'Rotate individual pages or entire documents.', icon: RotateCw, color: 'text-purple-500', bg: 'bg-purple-50' },
-      { id: 'page-numbers', name: 'Add page numbers', desc: 'Insert customizable page numbering headers/footers.', icon: Hash, color: 'text-purple-600', bg: 'bg-purple-50', inactive: true, badge: 'Coming Soon' },
+      { id: 'page-numbers', name: 'Add page numbers', desc: 'Insert customizable page numbering headers/footers.', icon: Hash, color: 'text-purple-600', bg: 'bg-purple-50' },
       { id: 'watermark', name: 'Add watermark', desc: 'Stamp text or image watermarks across pages.', icon: Stamp, color: 'text-fuchsia-600', bg: 'bg-fuchsia-50', inactive: true, badge: 'Coming Soon' },
       { id: 'crop', name: 'Crop PDF', desc: 'Trim margins and modify page visible area.', icon: Crop, color: 'text-pink-500', bg: 'bg-pink-50', inactive: true, badge: 'Coming Soon' },
       { id: 'edit', name: 'Edit PDF', desc: 'Add text, shapes, and freehand annotations.', icon: Edit3, color: 'text-rose-600', bg: 'bg-rose-50', inactive: true, badge: 'Coming Soon' },
