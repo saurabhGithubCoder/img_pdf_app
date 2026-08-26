@@ -353,6 +353,58 @@ app.post('/api/convert/pdf-to-powerpoint', upload.single('file'), async (req, re
   }
 });
 
+// PDF to Excel (.xlsx) using Python openpyxl engine
+app.post('/api/convert/pdf-to-excel', upload.single('file'), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'No PDF file uploaded.' });
+  }
+
+  const tempId = `pdf2excel_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+  const tempDir = path.join(os.tmpdir(), tempId);
+  const inputPdfPath = path.join(tempDir, 'input.pdf');
+  const outputXlsxPath = path.join(tempDir, 'output.xlsx');
+  const pythonScriptPath = path.join(__dirname, 'convert_pdf2excel.py');
+
+  try {
+    await fs.mkdir(tempDir, { recursive: true });
+    await fs.writeFile(inputPdfPath, req.file.buffer);
+
+    await new Promise((resolve, reject) => {
+      const py = spawn('python3', [pythonScriptPath, inputPdfPath, outputXlsxPath]);
+
+      let stderr = '';
+      py.stderr.on('data', (data) => {
+        stderr += data.toString();
+      });
+
+      py.on('close', (code) => {
+        if (code === 0) {
+          resolve();
+        } else {
+          reject(new Error(`convert_pdf2excel failed with code ${code}: ${stderr}`));
+        }
+      });
+
+      py.on('error', (err) => reject(err));
+    });
+
+    const xlsxBuffer = await fs.readFile(outputXlsxPath);
+    const originalName = req.file.originalname.replace(/\.[^/.]+$/, '');
+
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    );
+    res.setHeader('Content-Disposition', `attachment; filename="${originalName}.xlsx"`);
+    return res.send(xlsxBuffer);
+  } catch (error) {
+    console.error('PDF to Excel conversion error:', error);
+    return res.status(500).json({ error: 'Failed to convert PDF to Excel spreadsheet.' });
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`Conversion server running on port ${PORT}`);

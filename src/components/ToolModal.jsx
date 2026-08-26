@@ -42,7 +42,8 @@ import {
   convertExcelToPDF,
   checkExcelPassword,
   convertPdfToWord,
-  convertPdfToPowerpoint
+  convertPdfToPowerpoint,
+  convertPdfToExcel
 } from '../utils/pdfWorker';
 
 export default function ToolModal({ tool, onClose }) {
@@ -60,7 +61,7 @@ export default function ToolModal({ tool, onClose }) {
   const [compressionPercent, setCompressionPercent] = useState(45);
 
   // HTML Tool settings
-  const [htmlInputMode, setHtmlInputMode] = useState('file'); // 'file' | 'code'
+  const [htmlInputMode, setHtmlInputMode] = useState('file');
   const [rawHtmlCode, setRawHtmlCode] = useState('');
 
   // Page-selector & Visual tools ('remove', 'extract', 'organize', 'rotate')
@@ -81,7 +82,10 @@ export default function ToolModal({ tool, onClose }) {
     if (isPageLevelTool && files.length > 0) {
       loadDocumentThumbnails(files[0]);
     } else if (
-      (tool.id === 'compress' || tool.id === 'pdf-to-word' || tool.id === 'pdf-to-powerpoint') &&
+      (tool.id === 'compress' ||
+        tool.id === 'pdf-to-word' ||
+        tool.id === 'pdf-to-powerpoint' ||
+        tool.id === 'pdf-to-excel') &&
       files.length > 0
     ) {
       validateCompressTarget(files[0]);
@@ -179,7 +183,8 @@ export default function ToolModal({ tool, onClose }) {
       tool.id === 'excel-to-pdf' ||
       tool.id === 'html-to-pdf' ||
       tool.id === 'pdf-to-word' ||
-      tool.id === 'pdf-to-powerpoint'
+      tool.id === 'pdf-to-powerpoint' ||
+      tool.id === 'pdf-to-excel'
     ) {
       setFiles([newFiles[0]]);
     } else {
@@ -194,7 +199,6 @@ export default function ToolModal({ tool, onClose }) {
     }
   };
 
-  // Image Reordering Handlers for JPG to PDF
   const handleImageDragStart = (e, index) => {
     setDraggedImageIndex(index);
     e.dataTransfer.effectAllowed = 'move';
@@ -229,7 +233,6 @@ export default function ToolModal({ tool, onClose }) {
     setFiles(updated.map((c) => c.file));
   };
 
-  // PDF Page Organizing Handlers
   const handlePageDragStart = (e, index) => {
     setDraggedPageIndex(index);
     e.dataTransfer.effectAllowed = 'move';
@@ -401,6 +404,9 @@ export default function ToolModal({ tool, onClose }) {
       let output;
 
       switch (tool.id) {
+        case 'pdf-to-excel':
+          output = await convertPdfToExcel(files[0]);
+          break;
         case 'pdf-to-powerpoint':
           output = await convertPdfToPowerpoint(files[0]);
           break;
@@ -513,6 +519,7 @@ export default function ToolModal({ tool, onClose }) {
     'html-to-pdf',
     'pdf-to-word',
     'pdf-to-powerpoint',
+    'pdf-to-excel',
     'pdf-to-jpg',
     'to-markdown',
     'jpg-to-pdf'
@@ -1171,7 +1178,7 @@ export default function ToolModal({ tool, onClose }) {
                   ? 'bg-yellow-600 hover:bg-yellow-700 shadow-yellow-600/20'
                   : tool.id === 'powerpoint-to-pdf' || tool.id === 'pdf-to-powerpoint'
                   ? 'bg-orange-600 hover:bg-orange-700 shadow-orange-600/20'
-                  : tool.id === 'excel-to-pdf'
+                  : tool.id === 'excel-to-pdf' || tool.id === 'pdf-to-excel'
                   ? 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/20'
                   : tool.id === 'html-to-pdf'
                   ? 'bg-amber-600 hover:bg-amber-700 shadow-amber-600/20'
@@ -1196,7 +1203,9 @@ export default function ToolModal({ tool, onClose }) {
               ) : (
                 <>
                   <span className="text-sm font-medium">
-                    {tool.id === 'pdf-to-powerpoint'
+                    {tool.id === 'pdf-to-excel'
+                      ? 'Convert PDF to EXCEL'
+                      : tool.id === 'pdf-to-powerpoint'
                       ? 'Convert PDF to POWERPOINT'
                       : tool.id === 'rotate'
                       ? `Save Rotated PDF (${thumbnails.length} Pages)`
@@ -1251,6 +1260,8 @@ export default function ToolModal({ tool, onClose }) {
                 ? 'PDF Converted to Word!'
                 : tool.id === 'pdf-to-powerpoint'
                 ? 'PDF Converted to PowerPoint!'
+                : tool.id === 'pdf-to-excel'
+                ? 'PDF Converted to Excel!'
                 : 'Processing Complete!'}
             </h4>
 
@@ -1307,7 +1318,9 @@ export default function ToolModal({ tool, onClose }) {
                   {tool.id === 'pdf-to-word'
                     ? 'Word Document'
                     : tool.id === 'pdf-to-powerpoint'
-                    ? 'your ppt'
+                    ? 'PowerPoint Presentation'
+                    : tool.id === 'pdf-to-excel'
+                    ? 'Excel Workbook'
                     : 'File'}
                 </span>
               </a>
