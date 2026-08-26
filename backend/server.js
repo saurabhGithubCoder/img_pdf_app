@@ -289,6 +289,70 @@ app.post('/api/convert/pdf-to-word', upload.single('file'), async (req, res) => 
   }
 });
 
+// PDF to PowerPoint (.pptx)
+app.post('/api/convert/pdf-to-powerpoint', upload.single('file'), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'No PDF file uploaded.' });
+  }
+
+  const tempId = `pdf2ppt_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+  const tempDir = path.join(os.tmpdir(), tempId);
+  const inputPdfPath = path.join(tempDir, 'input.pdf');
+  const outputPptxPath = path.join(tempDir, 'input.pptx');
+
+  try {
+    await fs.mkdir(tempDir, { recursive: true });
+    await fs.writeFile(inputPdfPath, req.file.buffer);
+
+    // Run LibreOffice with impress_pdf_import filter
+    await new Promise((resolve, reject) => {
+      const lo = spawn('libreoffice', [
+        '--headless',
+        '--invisible',
+        '--nocrashreport',
+        '--nodefault',
+        '--nofirststartwizard',
+        '--infilter=impress_pdf_import',
+        '--convert-to',
+        'pptx',
+        '--outdir',
+        tempDir,
+        inputPdfPath,
+      ]);
+
+      let stderr = '';
+      lo.stderr.on('data', (data) => {
+        stderr += data.toString();
+      });
+
+      lo.on('close', (code) => {
+        if (code === 0) {
+          resolve();
+        } else {
+          reject(new Error(`LibreOffice exited with code ${code}. Error: ${stderr}`));
+        }
+      });
+
+      lo.on('error', (err) => reject(err));
+    });
+
+    const pptxBuffer = await fs.readFile(outputPptxPath);
+    const originalName = req.file.originalname.replace(/\.[^/.]+$/, '');
+
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+    );
+    res.setHeader('Content-Disposition', `attachment; filename="${originalName}.pptx"`);
+    return res.send(pptxBuffer);
+  } catch (error) {
+    console.error('PDF to PowerPoint conversion error:', error);
+    return res.status(500).json({ error: 'Failed to convert PDF to PowerPoint presentation.' });
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`Conversion server running on port ${PORT}`);

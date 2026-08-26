@@ -872,3 +872,39 @@ export async function convertPdfToWord(file) {
     compressedSize: docxBlob.size,
   };
 }
+
+/**
+ * Convert PDF to PowerPoint presentation (.pptx) using the backend service.
+ * @param {File} file - PDF document file
+ */
+export async function convertPdfToPowerpoint(file) {
+  const isLocked = await checkPdfPassword(file);
+  if (isLocked) {
+    const err = new Error(`Cannot process: "${file.name}" is password-protected.`);
+    err.lockedFiles = [file.name];
+    throw err;
+  }
+
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const response = await fetch('/api/convert/pdf-to-powerpoint', {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.error || 'Server failed to convert PDF to PowerPoint presentation.');
+  }
+
+  const pptxBlob = await response.blob();
+  const baseName = file.name.replace(/\.[^/.]+$/, '');
+
+  return {
+    blob: pptxBlob,
+    filename: `${baseName}.pptx`,
+    originalSize: file.size,
+    compressedSize: pptxBlob.size,
+  };
+}

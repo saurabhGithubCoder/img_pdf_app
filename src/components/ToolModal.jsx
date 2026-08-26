@@ -41,7 +41,8 @@ import {
   convertHtmlToPDF,
   convertExcelToPDF,
   checkExcelPassword,
-  convertPdfToWord
+  convertPdfToWord,
+  convertPdfToPowerpoint
 } from '../utils/pdfWorker';
 
 export default function ToolModal({ tool, onClose }) {
@@ -79,7 +80,10 @@ export default function ToolModal({ tool, onClose }) {
   useEffect(() => {
     if (isPageLevelTool && files.length > 0) {
       loadDocumentThumbnails(files[0]);
-    } else if (tool.id === 'compress' && files.length > 0) {
+    } else if (
+      (tool.id === 'compress' || tool.id === 'pdf-to-word' || tool.id === 'pdf-to-powerpoint') &&
+      files.length > 0
+    ) {
       validateCompressTarget(files[0]);
     } else if (tool.id === 'word-to-pdf' && files.length > 0) {
       validateWordTarget(files[0]);
@@ -173,7 +177,9 @@ export default function ToolModal({ tool, onClose }) {
       tool.id === 'word-to-pdf' ||
       tool.id === 'powerpoint-to-pdf' ||
       tool.id === 'excel-to-pdf' ||
-      tool.id === 'html-to-pdf'
+      tool.id === 'html-to-pdf' ||
+      tool.id === 'pdf-to-word' ||
+      tool.id === 'pdf-to-powerpoint'
     ) {
       setFiles([newFiles[0]]);
     } else {
@@ -395,6 +401,12 @@ export default function ToolModal({ tool, onClose }) {
       let output;
 
       switch (tool.id) {
+        case 'pdf-to-powerpoint':
+          output = await convertPdfToPowerpoint(files[0]);
+          break;
+        case 'rotate':
+          output = await rotatePDF(files[0], thumbnails);
+          break;
         case 'pdf-to-word':
           output = await convertPdfToWord(files[0]);
           break;
@@ -430,9 +442,6 @@ export default function ToolModal({ tool, onClose }) {
           break;
         case 'split':
           output = await splitPDF(files[0]);
-          break;
-        case 'rotate':
-          output = await rotatePDF(files[0], thumbnails);
           break;
         case 'pdf-to-jpg':
           output = await pdfToJpg(files[0]);
@@ -503,6 +512,7 @@ export default function ToolModal({ tool, onClose }) {
     'excel-to-pdf',
     'html-to-pdf',
     'pdf-to-word',
+    'pdf-to-powerpoint',
     'pdf-to-jpg',
     'to-markdown',
     'jpg-to-pdf'
@@ -767,7 +777,6 @@ export default function ToolModal({ tool, onClose }) {
                         />
                       </div>
 
-                      {/* Top Action Overlay */}
                       <div className="absolute top-1.5 right-1.5 flex items-center space-x-1 opacity-90 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
                         <button
                           type="button"
@@ -787,7 +796,6 @@ export default function ToolModal({ tool, onClose }) {
                         </button>
                       </div>
 
-                      {/* Card Footer */}
                       <div className="px-2 py-1 bg-white border-t border-slate-100 flex items-center justify-between text-[10px] text-slate-500 font-semibold">
                         <div className="flex items-center space-x-1 truncate max-w-[80px]">
                           <GripVertical className="w-3 h-3 text-slate-400 shrink-0" />
@@ -1161,7 +1169,7 @@ export default function ToolModal({ tool, onClose }) {
                   ? 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/20'
                   : tool.id === 'jpg-to-pdf'
                   ? 'bg-yellow-600 hover:bg-yellow-700 shadow-yellow-600/20'
-                  : tool.id === 'powerpoint-to-pdf'
+                  : tool.id === 'powerpoint-to-pdf' || tool.id === 'pdf-to-powerpoint'
                   ? 'bg-orange-600 hover:bg-orange-700 shadow-orange-600/20'
                   : tool.id === 'excel-to-pdf'
                   ? 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/20'
@@ -1188,7 +1196,11 @@ export default function ToolModal({ tool, onClose }) {
               ) : (
                 <>
                   <span className="text-sm font-medium">
-                    {tool.id === 'pdf-to-word'
+                    {tool.id === 'pdf-to-powerpoint'
+                      ? 'Convert PDF to POWERPOINT'
+                      : tool.id === 'rotate'
+                      ? `Save Rotated PDF (${thumbnails.length} Pages)`
+                      : tool.id === 'pdf-to-word'
                       ? 'Convert PDF to WORD'
                       : tool.id === 'excel-to-pdf'
                       ? 'Convert EXCEL to PDF'
@@ -1198,8 +1210,6 @@ export default function ToolModal({ tool, onClose }) {
                       ? 'Convert POWERPOINT to PDF'
                       : tool.id === 'word-to-pdf'
                       ? 'Convert WORD to PDF'
-                      : tool.id === 'rotate'
-                      ? `Save Rotated PDF (${thumbnails.length} Pages)`
                       : tool.id === 'jpg-to-pdf'
                       ? `Convert ${imageCards.length} ${imageCards.length === 1 ? 'Image' : 'Images'} to PDF`
                       : tool.id === 'compress'
@@ -1223,10 +1233,10 @@ export default function ToolModal({ tool, onClose }) {
           <div className="text-center py-6 space-y-4">
             <CheckCircle2 className="w-12 h-12 text-emerald-500 mx-auto" />
             <h4 className="text-lg font-bold text-slate-900">
-              {tool.id === 'compress'
-                ? 'Compression Complete!'
-                : tool.id === 'rotate'
+              {tool.id === 'rotate'
                 ? 'PDF Rotated Successfully!'
+                : tool.id === 'compress'
+                ? 'Compression Complete!'
                 : tool.id === 'jpg-to-pdf'
                 ? 'Images Converted to PDF!'
                 : tool.id === 'word-to-pdf'
@@ -1239,6 +1249,8 @@ export default function ToolModal({ tool, onClose }) {
                 ? 'HTML Converted to PDF!'
                 : tool.id === 'pdf-to-word'
                 ? 'PDF Converted to Word!'
+                : tool.id === 'pdf-to-powerpoint'
+                ? 'PDF Converted to PowerPoint!'
                 : 'Processing Complete!'}
             </h4>
 
@@ -1290,7 +1302,14 @@ export default function ToolModal({ tool, onClose }) {
                 className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-medium shadow-md shadow-emerald-600/20 text-center flex items-center justify-center space-x-2 transition"
               >
                 <Download className="w-4 h-4" />
-                <span>Download {tool.id === 'pdf-to-word' ? 'Word Document' : 'File'}</span>
+                <span>
+                  Download{' '}
+                  {tool.id === 'pdf-to-word'
+                    ? 'Word Document'
+                    : tool.id === 'pdf-to-powerpoint'
+                    ? 'your ppt'
+                    : 'File'}
+                </span>
               </a>
             </div>
           </div>
