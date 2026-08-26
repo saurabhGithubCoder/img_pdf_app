@@ -39,8 +39,11 @@ A modern, high-performance web application and desktop suite for converting, man
 │   └── server.js                # Express API endpoints & file conversion pipeline
 ├── src/
 │   ├── components/
+|   |   ├── Header.jsx           # header of app 
 │   │   ├── ToolCard.jsx         # Tool card UI component
 │   │   └── ToolModal.jsx        # Interactive modal & page workspace
+|   ├── data/
+|   │   └── pdfTools.jsx         # all pdf tools entry
 │   ├── utils/
 │   │   └── pdfWorker.js         # Client-side processing & backend API client
 │   ├── App.jsx                  # Main dashboard layout
