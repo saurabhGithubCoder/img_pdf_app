@@ -24,7 +24,11 @@ import {
   Presentation,
   Sheet,
   FileCode,
-  RefreshCw
+  RefreshCw,
+  RectangleVertical,
+  RectangleHorizontal,
+  Square,
+  Maximize2
 } from 'lucide-react';
 import {
   mergePDFs,
@@ -63,7 +67,6 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
   const [result, setResult] = useState(null);
   const [errorMsg, setErrorMsg] = useState('');
 
-  // Hidden file input ref for "Change Document" action
   const changeFileInputRef = useRef(null);
 
   // Compression tool settings
@@ -85,6 +88,14 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
   const [rangeInput, setRangeInput] = useState('');
   const [draggedPageIndex, setDraggedPageIndex] = useState(null);
   const [draggedImageIndex, setDraggedImageIndex] = useState(null);
+
+  // Image to PDF Options State
+  const [imageToPdfOptions, setImageToPdfOptions] = useState({
+    orientation: 'portrait', // 'portrait' | 'landscape'
+    pageSize: 'a4', // 'fit' | 'a4' | 'letter'
+    margin: 'none', // 'none' | 'small' | 'big'
+    mergeAll: true,
+  });
 
   // Add Page Numbers Options State
   const [pageNumberOptions, setPageNumberOptions] = useState({
@@ -168,7 +179,6 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
     return 'application/pdf';
   };
 
-  // Directly replaces the document in place with security checking
   const handleReplaceDocument = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -195,7 +205,6 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
       URL.revokeObjectURL(result.url);
       setResult(null);
     }
-    // Reset file input value so selecting the same file again triggers onChange
     e.target.value = '';
   };
 
@@ -417,6 +426,9 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
     try {
       let output;
       switch (tool.id) {
+        case 'jpg-to-pdf':
+          output = await imagesToPDF(imageCards, imageToPdfOptions);
+          break;
         case 'watermark':
           output = await addWatermarkToPDF(files[0], watermarkOptions);
           break;
@@ -446,9 +458,6 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
           break;
         case 'word-to-pdf':
           output = await convertWordToPDF(files[0]);
-          break;
-        case 'jpg-to-pdf':
-          output = await imagesToPDF(imageCards);
           break;
         case 'compress':
           output = await compressPDF(files[0], compressionPercent);
@@ -515,7 +524,6 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
     return map[pos] || 'top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2';
   };
 
-  // Helper to render customized visual card thumbnail for single file conversions
   const renderSingleFileThumbnailCard = (file) => {
     let IconComp = FileText;
     let badgeText = 'DOC';
@@ -551,7 +559,6 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
           </span>
         </div>
 
-        {/* Thumbnail Illustration */}
         <div className="w-20 h-28 bg-white border border-slate-200 rounded-xl shadow-xs flex flex-col items-center justify-center p-3 relative mt-2">
           <div className="w-full space-y-1.5 opacity-40">
             <div className="h-1.5 bg-slate-400 rounded-full w-3/4" />
@@ -571,7 +578,6 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
           </p>
         </div>
 
-        {/* Triggers in-place file dialog prompt */}
         <button
           type="button"
           onClick={() => changeFileInputRef.current?.click()}
@@ -586,7 +592,6 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 pb-20">
-      {/* Hidden File Input for in-place document change */}
       <input
         type="file"
         ref={changeFileInputRef}
@@ -600,7 +605,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <button
             onClick={onBack}
-            className="flex items-center space-x-2 text-slate-600 hover:text-slate-900 font-semibold text-sm px-3 py-1.5 rounded-xl hover:bg-slate-100 transition"
+            className="flex items-center space-x-2 text-slate-600 hover:text-slate-900 font-semibold text-sm px-3 py-1.5 rounded-xl hover:bg-slate-100 transition cursor-pointer"
           >
             <ArrowLeft className="w-4 h-4" />
             <span>Back to Home</span>
@@ -628,29 +633,214 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
 
         {!result ? (
           <div className="space-y-6">
-            {/* Context Banners */}
-            {tool.id === 'compress' && (
-              <div className="p-4 bg-emerald-50/70 border border-emerald-200 rounded-2xl flex items-start space-x-2.5 text-xs text-emerald-900">
-                <Info className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-                <p>We try our best to compress your PDF while preserving high visual quality and text clarity.</p>
+            {/* 1. Image to PDF Studio */}
+            {tool.id === 'jpg-to-pdf' && (
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+                {/* Left: Previews & Rearrange */}
+                <div className="lg:col-span-8 bg-white border border-slate-200 rounded-3xl p-6 shadow-sm space-y-4">
+                  <div className="flex items-center justify-between pb-4 border-b border-slate-100 text-xs font-semibold">
+                    <span className="text-slate-600">{imageCards.length} {imageCards.length === 1 ? 'Image' : 'Images'} Selected</span>
+                    <label htmlFor="studioAddImagesInput" className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 font-bold rounded-xl text-xs cursor-pointer flex items-center gap-1">
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Add More Images</span>
+                      <input
+                        type="file"
+                        id="studioAddImagesInput"
+                        multiple
+                        accept="image/jpeg,image/png,image/webp"
+                        className="hidden"
+                        onChange={handleAddMoreImages}
+                      />
+                    </label>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 max-h-[560px] overflow-y-auto pr-1">
+                    {imageCards.map((card, idx) => {
+                      const isLandscape = imageToPdfOptions.orientation === 'landscape';
+                      const marginPadding =
+                        imageToPdfOptions.margin === 'small' ? 'p-3' : imageToPdfOptions.margin === 'big' ? 'p-5' : 'p-0';
+
+                      return (
+                        <div
+                          key={card.id}
+                          draggable
+                          onDragStart={(e) => handleImageDragStart(e, idx)}
+                          onDragOver={handleImageDragOver}
+                          onDrop={(e) => handleImageDrop(e, idx)}
+                          className={`group relative rounded-2xl border-2 overflow-hidden bg-slate-50 flex flex-col items-center justify-center p-2 shadow-xs cursor-grab active:cursor-grabbing transition ${
+                            draggedImageIndex === idx ? 'opacity-40 border-rose-400' : 'border-slate-200 hover:border-rose-300'
+                          }`}
+                        >
+                          {/* Simulated Paper Sheet */}
+                          <div
+                            className={`w-full bg-white border border-slate-200 rounded-xl flex items-center justify-center overflow-hidden transition-all shadow-xs ${marginPadding} ${
+                              isLandscape ? 'aspect-4/3' : 'aspect-3/4'
+                            }`}
+                          >
+                            <img
+                              src={card.previewUrl}
+                              alt={card.file.name}
+                              style={{ transform: `rotate(${card.rotation}deg)` }}
+                              className="max-h-full max-w-full object-contain"
+                            />
+                          </div>
+
+                          <div className="absolute top-3 right-3 flex space-x-1 opacity-90 sm:opacity-0 sm:group-hover:opacity-100 transition">
+                            <button
+                              type="button"
+                              onClick={() => rotateImageCard(idx)}
+                              className="p-1.5 bg-white text-slate-700 rounded-lg shadow hover:text-rose-600 cursor-pointer"
+                              title="Rotate"
+                            >
+                              <RotateCw className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => deleteImageCard(idx)}
+                              className="p-1.5 bg-white text-slate-700 rounded-lg shadow hover:text-red-600 cursor-pointer"
+                              title="Delete"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+
+                          <div className="w-full px-2 pt-2 flex items-center justify-between text-[11px] font-semibold text-slate-500">
+                            <span className="truncate max-w-[100px]">{card.file.name}</span>
+                            <span>Page {idx + 1}</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Right: Options Sidebar */}
+                <div className="lg:col-span-4 bg-white border border-slate-200 rounded-3xl p-6 space-y-5 shadow-sm text-xs">
+                  <h3 className="font-bold text-slate-900 text-sm border-b pb-3">Image to PDF options</h3>
+
+                  {/* 1. Page Orientation */}
+                  <div className="space-y-2">
+                    <label className="font-semibold text-slate-700 block">Page orientation</label>
+                    <div className="grid grid-cols-2 gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setImageToPdfOptions({ ...imageToPdfOptions, orientation: 'portrait' })}
+                        className={`p-3 rounded-2xl border text-center flex flex-col items-center justify-center space-y-1.5 transition cursor-pointer ${
+                          imageToPdfOptions.orientation === 'portrait'
+                            ? 'border-rose-500 bg-rose-50/50 text-rose-700 font-bold ring-2 ring-rose-500/20'
+                            : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                        }`}
+                      >
+                        <RectangleVertical className="w-5 h-5 text-rose-600" />
+                        <span>Portrait</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setImageToPdfOptions({ ...imageToPdfOptions, orientation: 'landscape' })}
+                        className={`p-3 rounded-2xl border text-center flex flex-col items-center justify-center space-y-1.5 transition cursor-pointer ${
+                          imageToPdfOptions.orientation === 'landscape'
+                            ? 'border-rose-500 bg-rose-50/50 text-rose-700 font-bold ring-2 ring-rose-500/20'
+                            : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                        }`}
+                      >
+                        <RectangleHorizontal className="w-5 h-5 text-rose-600" />
+                        <span>Landscape</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* 2. Page Size */}
+                  <div className="space-y-1.5 pt-2 border-t border-slate-100">
+                    <label className="font-semibold text-slate-700 block">Page size</label>
+                    <select
+                      value={imageToPdfOptions.pageSize}
+                      onChange={(e) => setImageToPdfOptions({ ...imageToPdfOptions, pageSize: e.target.value })}
+                      className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:outline-none focus:ring-2 focus:ring-rose-500/20"
+                    >
+                      <option value="a4">A4 (297x210 mm)</option>
+                      <option value="fit">Fit (Same page size as image)</option>
+                      <option value="letter">US Letter (215.9x279.4 mm)</option>
+                    </select>
+                  </div>
+
+                  {/* 3. Margin */}
+                  <div className="space-y-2 pt-2 border-t border-slate-100">
+                    <label className="font-semibold text-slate-700 block">Margin</label>
+                    <div className="grid grid-cols-3 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setImageToPdfOptions({ ...imageToPdfOptions, margin: 'none' })}
+                        className={`p-2.5 rounded-xl border text-center flex flex-col items-center justify-center space-y-1 transition cursor-pointer ${
+                          imageToPdfOptions.margin === 'none'
+                            ? 'border-rose-500 bg-rose-50 text-rose-700 font-bold ring-2 ring-rose-500/20'
+                            : 'border-slate-200 bg-white text-slate-600'
+                        }`}
+                      >
+                        <Square className="w-4 h-4 text-rose-600" />
+                        <span className="text-[11px]">No margin</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setImageToPdfOptions({ ...imageToPdfOptions, margin: 'small' })}
+                        className={`p-2.5 rounded-xl border text-center flex flex-col items-center justify-center space-y-1 transition cursor-pointer ${
+                          imageToPdfOptions.margin === 'small'
+                            ? 'border-rose-500 bg-rose-50 text-rose-700 font-bold ring-2 ring-rose-500/20'
+                            : 'border-slate-200 bg-white text-slate-600'
+                        }`}
+                      >
+                        <SlidersHorizontal className="w-4 h-4 text-rose-600" />
+                        <span className="text-[11px]">Small</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setImageToPdfOptions({ ...imageToPdfOptions, margin: 'big' })}
+                        className={`p-2.5 rounded-xl border text-center flex flex-col items-center justify-center space-y-1 transition cursor-pointer ${
+                          imageToPdfOptions.margin === 'big'
+                            ? 'border-rose-500 bg-rose-50 text-rose-700 font-bold ring-2 ring-rose-500/20'
+                            : 'border-slate-200 bg-white text-slate-600'
+                        }`}
+                      >
+                        <Maximize2 className="w-4 h-4 text-rose-600" />
+                        <span className="text-[11px]">Big</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* 4. Merge Checkbox */}
+                  <div className="pt-2 border-t border-slate-100">
+                    <label className="flex items-center space-x-2.5 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={imageToPdfOptions.mergeAll}
+                        onChange={(e) => setImageToPdfOptions({ ...imageToPdfOptions, mergeAll: e.target.checked })}
+                        className="w-4 h-4 rounded accent-rose-600"
+                      />
+                      <span className="font-semibold text-slate-800">Merge all images in one PDF file</span>
+                    </label>
+                  </div>
+
+                  <button
+                    onClick={executeAction}
+                    disabled={isProcessing || imageCards.length === 0}
+                    className="w-full py-3.5 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-2xl shadow-md transition flex items-center justify-center space-x-2 cursor-pointer disabled:opacity-50"
+                  >
+                    {isProcessing ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <>
+                        <span>Convert to PDF</span>
+                        <ArrowRight className="w-4 h-4" />
+                      </>
+                    )}
+                  </button>
+                </div>
               </div>
             )}
 
-            {tool.id === 'word-to-pdf' && (
-              <div className="p-4 bg-blue-50/70 border border-blue-200 rounded-2xl flex items-start space-x-2.5 text-xs text-blue-900">
-                <Info className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
-                <p>We try our best to convert your Word document to PDF maintaining an exact visual match and layout.</p>
-              </div>
-            )}
-
-            {['pdf-to-word', 'pdf-to-powerpoint', 'pdf-to-excel'].includes(tool.id) && (
-              <div className="p-4 bg-amber-50/70 border border-amber-200 rounded-2xl flex items-start space-x-2.5 text-xs text-amber-900">
-                <Info className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                <p><strong>Experimental Feature:</strong> This converter is under active development and testing. Complex vector layouts and tables may differ slightly from the source PDF.</p>
-              </div>
-            )}
-
-            {/* 1. Watermark Studio */}
+            {/* 2. Watermark Studio */}
             {tool.id === 'watermark' && (
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
                 <div className="lg:col-span-8 bg-white border border-slate-200 rounded-3xl p-6 shadow-sm">
@@ -925,7 +1115,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                   <button
                     onClick={executeAction}
                     disabled={isProcessing || isRenderingPages}
-                    className="w-full py-3.5 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-2xl shadow-md transition flex items-center justify-center space-x-2"
+                    className="w-full py-3.5 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-2xl shadow-md transition flex items-center justify-center space-x-2 cursor-pointer"
                   >
                     {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <><span>Add watermark</span><ArrowRight className="w-4 h-4" /></>}
                   </button>
@@ -933,7 +1123,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
               </div>
             )}
 
-            {/* 2. Page Numbers Studio */}
+            {/* 3. Page Numbers Studio */}
             {tool.id === 'page-numbers' && (
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
                 <div className="lg:col-span-8 bg-white border border-slate-200 rounded-3xl p-6 shadow-sm">
@@ -1156,7 +1346,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                   <button
                     onClick={executeAction}
                     disabled={isProcessing || isRenderingPages}
-                    className="w-full py-3.5 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-2xl shadow-md transition flex items-center justify-center space-x-2"
+                    className="w-full py-3.5 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-2xl shadow-md transition flex items-center justify-center space-x-2 cursor-pointer"
                   >
                     {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <><span>Add page numbers</span><ArrowRight className="w-4 h-4" /></>}
                   </button>
@@ -1177,7 +1367,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                     <button
                       type="button"
                       onClick={() => rotateAllPages(90)}
-                      className="px-3 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-semibold transition flex items-center space-x-1 shadow-sm"
+                      className="px-3 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-semibold transition flex items-center space-x-1 shadow-sm cursor-pointer"
                     >
                       <RotateCw className="w-4 h-4" />
                       <span>Rotate All 90°</span>
@@ -1185,7 +1375,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                     <button
                       type="button"
                       onClick={() => rotateAllPages(-90)}
-                      className="px-3 py-2 bg-white hover:bg-purple-100 text-purple-700 border border-purple-200 rounded-xl font-semibold transition flex items-center space-x-1"
+                      className="px-3 py-2 bg-white hover:bg-purple-100 text-purple-700 border border-purple-200 rounded-xl font-semibold transition flex items-center space-x-1 cursor-pointer"
                     >
                       <RotateCcw className="w-4 h-4" />
                       <span>-90°</span>
@@ -1193,7 +1383,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                     <button
                       type="button"
                       onClick={() => changeFileInputRef.current?.click()}
-                      className="px-3 py-2 bg-white hover:bg-purple-100 text-purple-700 border border-purple-200 rounded-xl font-semibold transition flex items-center space-x-1"
+                      className="px-3 py-2 bg-white hover:bg-purple-100 text-purple-700 border border-purple-200 rounded-xl font-semibold transition flex items-center space-x-1 cursor-pointer"
                     >
                       <RefreshCw className="w-3.5 h-3.5" />
                       <span>Change</span>
@@ -1208,7 +1398,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                         <img src={thumb.dataUrl} alt={`Page ${idx + 1}`} style={{ transform: `rotate(${thumb.rotation}deg)` }} className="max-h-36 object-contain transition duration-200" />
                       </div>
                       <div className="absolute top-2 right-2">
-                        <button onClick={() => rotateSinglePage(idx, 90)} className="p-2 bg-white/95 text-slate-700 rounded-xl shadow hover:text-purple-600 transition">
+                        <button onClick={() => rotateSinglePage(idx, 90)} className="p-2 bg-white/95 text-slate-700 rounded-xl shadow hover:text-purple-600 transition cursor-pointer">
                           <RotateCw className="w-4 h-4" />
                         </button>
                       </div>
@@ -1220,7 +1410,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                   ))}
                 </div>
 
-                <button onClick={executeAction} disabled={isProcessing} className="w-full py-4 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-2xl shadow-md transition flex items-center justify-center space-x-2">
+                <button onClick={executeAction} disabled={isProcessing} className="w-full py-4 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-2xl shadow-md transition flex items-center justify-center space-x-2 cursor-pointer">
                   {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <span>Save Rotated PDF</span>}
                 </button>
               </div>
@@ -1256,8 +1446,8 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                         <img src={thumb.dataUrl} alt={`Page ${idx + 1}`} style={{ transform: `rotate(${thumb.rotation}deg)` }} className="max-h-36 object-contain transition duration-200" />
                       </div>
                       <div className="absolute top-2 right-2 flex space-x-1 opacity-90 sm:opacity-0 sm:group-hover:opacity-100 transition">
-                        <button onClick={() => rotateSinglePage(idx, 90)} className="p-1.5 bg-white text-slate-700 rounded-lg shadow hover:text-amber-600"><RotateCw className="w-3.5 h-3.5" /></button>
-                        <button onClick={() => deleteSinglePage(idx)} className="p-1.5 bg-white text-slate-700 rounded-lg shadow hover:text-red-600"><Trash2 className="w-3.5 h-3.5" /></button>
+                        <button onClick={() => rotateSinglePage(idx, 90)} className="p-1.5 bg-white text-slate-700 rounded-lg shadow hover:text-amber-600 cursor-pointer"><RotateCw className="w-3.5 h-3.5" /></button>
+                        <button onClick={() => deleteSinglePage(idx)} className="p-1.5 bg-white text-slate-700 rounded-lg shadow hover:text-red-600 cursor-pointer"><Trash2 className="w-3.5 h-3.5" /></button>
                       </div>
                       <div className="px-2 py-1 bg-white border-t border-slate-100 flex items-center justify-between text-[11px] font-semibold text-slate-500">
                         <span>Pos: {idx + 1}</span>
@@ -1266,7 +1456,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                     </div>
                   ))}
                 </div>
-                <button onClick={executeAction} disabled={isProcessing} className="w-full py-4 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-2xl shadow-md transition flex items-center justify-center space-x-2">
+                <button onClick={executeAction} disabled={isProcessing} className="w-full py-4 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-2xl shadow-md transition flex items-center justify-center space-x-2 cursor-pointer">
                   {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <span>Save Organized PDF</span>}
                 </button>
               </div>
@@ -1327,7 +1517,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                 <button
                   onClick={executeAction}
                   disabled={isProcessing || selectedPages.size === 0}
-                  className={`w-full py-4 text-white font-bold rounded-2xl shadow-md transition flex items-center justify-center space-x-2 ${
+                  className={`w-full py-4 text-white font-bold rounded-2xl shadow-md transition flex items-center justify-center space-x-2 cursor-pointer ${
                     tool.id === 'remove' ? 'bg-red-600 hover:bg-red-700' : 'bg-emerald-600 hover:bg-emerald-700'
                   }`}
                 >
@@ -1367,7 +1557,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                         key={preset.percent}
                         type="button"
                         onClick={() => setCompressionPercent(preset.percent)}
-                        className={`p-4 rounded-2xl border text-left transition ${
+                        className={`p-4 rounded-2xl border text-left transition cursor-pointer ${
                           compressionPercent === preset.percent ? 'border-emerald-500 bg-emerald-50/50 shadow-sm ring-2 ring-emerald-500/20' : 'border-slate-200 bg-white'
                         }`}
                       >
@@ -1397,63 +1587,13 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                   />
                 </div>
 
-                <button onClick={executeAction} disabled={isProcessing} className="w-full py-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-2xl shadow-md transition flex items-center justify-center space-x-2">
+                <button onClick={executeAction} disabled={isProcessing} className="w-full py-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-2xl shadow-md transition flex items-center justify-center space-x-2 cursor-pointer">
                   {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <span>Compress PDF (~{compressionPercent}%)</span>}
                 </button>
               </div>
             )}
 
-            {/* 7. JPG to PDF Studio */}
-            {tool.id === 'jpg-to-pdf' && (
-              <div className="bg-white border border-slate-200 rounded-3xl p-6 space-y-6 shadow-sm">
-                <div className="flex items-center justify-between">
-                  <div className="text-xs text-slate-500 font-medium">Drag images to reorder. Output order corresponds to left-to-right, top-to-bottom.</div>
-                  <label htmlFor="studioAddImagesInput" className="px-3 py-1.5 bg-yellow-50 hover:bg-yellow-100 border border-yellow-200 text-yellow-800 font-bold rounded-xl text-xs cursor-pointer flex items-center gap-1">
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>Add More Images</span>
-                    <input
-                      type="file"
-                      id="studioAddImagesInput"
-                      multiple
-                      accept="image/jpeg,image/png,image/webp"
-                      className="hidden"
-                      onChange={handleAddMoreImages}
-                    />
-                  </label>
-                </div>
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
-                  {imageCards.map((card, idx) => (
-                    <div
-                      key={card.id}
-                      draggable
-                      onDragStart={(e) => handleImageDragStart(e, idx)}
-                      onDragOver={handleImageDragOver}
-                      onDrop={(e) => handleImageDrop(e, idx)}
-                      className={`group relative rounded-2xl border-2 bg-slate-50 overflow-hidden cursor-grab active:cursor-grabbing p-2 shadow-xs transition ${
-                        draggedImageIndex === idx ? 'opacity-40 border-yellow-400' : 'border-slate-200 hover:border-yellow-400'
-                      }`}
-                    >
-                      <div className="p-2 flex items-center justify-center min-h-[140px]">
-                        <img src={card.previewUrl} alt={card.file.name} style={{ transform: `rotate(${card.rotation}deg)` }} className="max-h-32 object-contain" />
-                      </div>
-                      <div className="absolute top-2 right-2 flex space-x-1 opacity-90 sm:opacity-0 sm:group-hover:opacity-100 transition">
-                        <button onClick={() => rotateImageCard(idx)} className="p-1.5 bg-white text-slate-700 rounded-lg shadow hover:text-yellow-600"><RotateCw className="w-3.5 h-3.5" /></button>
-                        <button onClick={() => deleteImageCard(idx)} className="p-1.5 bg-white text-slate-700 rounded-lg shadow hover:text-red-600"><Trash2 className="w-3.5 h-3.5" /></button>
-                      </div>
-                      <div className="px-2 py-1 bg-white border-t border-slate-100 flex items-center justify-between text-[10px] font-semibold text-slate-500">
-                        <span>Page {idx + 1}</span>
-                        <span>{(card.file.size / 1024).toFixed(0)} KB</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                <button onClick={executeAction} disabled={isProcessing} className="w-full py-4 bg-yellow-600 hover:bg-yellow-700 text-white font-bold rounded-2xl shadow-md transition flex items-center justify-center space-x-2">
-                  {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <span>Convert {imageCards.length} Images to PDF</span>}
-                </button>
-              </div>
-            )}
-
-            {/* 8. Single File Conversions (Word to PDF, PPT to PDF, Excel to PDF, HTML to PDF) */}
+            {/* 7. Single File Conversions (Word to PDF, PPT to PDF, Excel to PDF, HTML to PDF) */}
             {['word-to-pdf', 'powerpoint-to-pdf', 'excel-to-pdf', 'html-to-pdf', 'pdf-to-word', 'pdf-to-powerpoint', 'pdf-to-excel', 'pdf-to-jpg', 'to-markdown'].includes(tool.id) && (
               <div className="bg-white border border-slate-200 rounded-3xl p-8 max-w-lg mx-auto space-y-6 shadow-sm">
                 <div className="space-y-4">
@@ -1473,7 +1613,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                 <button
                   onClick={executeAction}
                   disabled={isProcessing}
-                  className={`w-full py-4 text-white font-bold rounded-2xl shadow-md transition flex items-center justify-center space-x-2 ${
+                  className={`w-full py-4 text-white font-bold rounded-2xl shadow-md transition flex items-center justify-center space-x-2 cursor-pointer ${
                     tool.id === 'word-to-pdf' || tool.id === 'pdf-to-word' ? 'bg-blue-600 hover:bg-blue-700' :
                     tool.id === 'powerpoint-to-pdf' || tool.id === 'pdf-to-powerpoint' ? 'bg-orange-600 hover:bg-orange-700' :
                     tool.id === 'excel-to-pdf' || tool.id === 'pdf-to-excel' ? 'bg-emerald-600 hover:bg-emerald-700' :
@@ -1495,7 +1635,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
               </div>
             )}
 
-            {/* 9. Merge PDF Multi-File Workspace */}
+            {/* 8. Merge PDF Multi-File Workspace */}
             {tool.id === 'merge' && (
               <div className="bg-white border border-slate-200 rounded-3xl p-8 max-w-xl mx-auto space-y-6 shadow-sm">
                 <div className="space-y-3">
@@ -1528,9 +1668,9 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                           <span className="text-slate-400 font-medium shrink-0">({formatFileSize(file.size)})</span>
                         </div>
                         <div className="flex items-center space-x-1 shrink-0">
-                          <button onClick={() => moveFileItem(idx, -1)} disabled={idx === 0} className="p-1 text-slate-500 hover:bg-slate-200 rounded disabled:opacity-20" title="Move Up"><ArrowUp className="w-3.5 h-3.5" /></button>
-                          <button onClick={() => moveFileItem(idx, 1)} disabled={idx === files.length - 1} className="p-1 text-slate-500 hover:bg-slate-200 rounded disabled:opacity-20" title="Move Down"><ArrowDown className="w-3.5 h-3.5" /></button>
-                          <button onClick={() => removeFileItem(idx)} className="p-1 text-rose-500 hover:bg-rose-50 rounded" title="Remove"><Trash2 className="w-3.5 h-3.5" /></button>
+                          <button onClick={() => moveFileItem(idx, -1)} disabled={idx === 0} className="p-1 text-slate-500 hover:bg-slate-200 rounded disabled:opacity-20 cursor-pointer" title="Move Up"><ArrowUp className="w-3.5 h-3.5" /></button>
+                          <button onClick={() => moveFileItem(idx, 1)} disabled={idx === files.length - 1} className="p-1 text-slate-500 hover:bg-slate-200 rounded disabled:opacity-20 cursor-pointer" title="Move Down"><ArrowDown className="w-3.5 h-3.5" /></button>
+                          <button onClick={() => removeFileItem(idx)} className="p-1 text-rose-500 hover:bg-rose-50 rounded cursor-pointer" title="Remove"><Trash2 className="w-3.5 h-3.5" /></button>
                         </div>
                       </div>
                     ))}

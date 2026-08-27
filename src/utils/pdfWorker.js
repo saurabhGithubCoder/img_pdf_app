@@ -335,39 +335,170 @@ export async function splitPDF(file) {
 }*/
 
 /**
- * Convert JPG/PNG Images into a single PDF.
+ * Convert an ordered list of Image files into PDF with layout options.
+ * @param {Array} imageItems - Array of image objects { file, rotation }
+ * @param {Object} options - Orientation, Page size, Margin & Merge settings
  */
-/**
- * Convert an ordered list of Image files or image items into a single PDF.
- * @param {Array} imageItems - Array of image file objects or objects with { file, rotation }
- */
-export async function imagesToPDF(imageItems) {
+export async function imagesToPDF(imageItems, options = {}) {
+  const {
+    orientation = 'portrait', // 'portrait' | 'landscape'
+    pageSize = 'a4', // 'fit' | 'a4' | 'letter'
+    margin = 'none', // 'none' | 'small' | 'big'
+    mergeAll = true,
+  } = options;
+
+  // Margin in points
+  let marginPt = 0;
+  if (margin === 'small') marginPt = 18;
+  if (margin === 'big') marginPt = 36;
+
+  // Standard dimensions in points (72 DPI)
+  const PAGE_SIZES = {
+    a4: { width: 595.28, height: 841.89 },
+    letter: { width: 612.0, height: 792.0 },
+  };
+
+  const createSinglePagePdf = async (item) => {
+    const doc = await PDFDocument.create();
+    const file = item.file || item;
+    const customRotation = item.rotation || 0;
+    const imgBytes = await file.arrayBuffer();
+
+    let embeddedImg;
+    if (file.type.includes('png') || file.name.toLowerCase().endsWith('.png')) {
+      embeddedImg = await doc.embedPng(imgBytes);
+    } else {
+      embeddedImg = await doc.embedJpg(imgBytes);
+    }
+
+    if (!embeddedImg) return null;
+
+    let pageWidth, pageHeight;
+
+    if (pageSize === 'fit') {
+      pageWidth = embeddedImg.width + marginPt * 2;
+      pageHeight = embeddedImg.height + marginPt * 2;
+      if (orientation === 'landscape' && pageHeight > pageWidth) {
+        [pageWidth, pageHeight] = [pageHeight, pageWidth];
+      }
+    } else {
+      const base = PAGE_SIZES[pageSize] || PAGE_SIZES.a4;
+      if (orientation === 'landscape') {
+        pageWidth = Math.max(base.width, base.height);
+        pageHeight = Math.min(base.width, base.height);
+      } else {
+        pageWidth = Math.min(base.width, base.height);
+        pageHeight = Math.max(base.width, base.height);
+      }
+    }
+
+    const page = doc.addPage([pageWidth, pageHeight]);
+
+    if (customRotation !== 0) {
+      page.setRotation(degrees(customRotation));
+    }
+
+    // Fit image inside available printable bounding box
+    const availableWidth = pageWidth - marginPt * 2;
+    const availableHeight = pageHeight - marginPt * 2;
+    const scale = Math.min(
+      availableWidth / embeddedImg.width,
+      availableHeight / embeddedImg.height,
+      1
+    );
+
+    const drawWidth = embeddedImg.width * scale;
+    const drawHeight = embeddedImg.height * scale;
+    const drawX = marginPt + (availableWidth - drawWidth) / 2;
+    const drawY = marginPt + (availableHeight - drawHeight) / 2;
+
+    page.drawImage(embeddedImg, {
+      x: drawX,
+      y: drawY,
+      width: drawWidth,
+      height: drawHeight,
+    });
+
+    return doc;
+  };
+
+  // If not merging into one PDF, build a ZIP of individual PDFs
+  if (!mergeAll && imageItems.length > 1) {
+    const zip = new JSZip();
+    for (let idx = 0; idx < imageItems.length; idx++) {
+      const item = imageItems[idx];
+      const singleDoc = await createSinglePagePdf(item);
+      if (singleDoc) {
+        const bytes = await singleDoc.save({ useObjectStreams: true });
+        const name = (item.file?.name || `image_${idx + 1}`).replace(/\.[^/.]+$/, '');
+        zip.file(`${name}.pdf`, bytes);
+      }
+    }
+    const zipBlob = await zip.generateAsync({ type: 'blob' });
+    return {
+      blob: zipBlob,
+      filename: 'converted_images.zip',
+    };
+  }
+
+  // Unified single PDF document
   const pdfDoc = await PDFDocument.create();
 
   for (const item of imageItems) {
     const file = item.file || item;
     const customRotation = item.rotation || 0;
     const imgBytes = await file.arrayBuffer();
-    let embeddedImg;
 
-    if (file.type.includes('png') || file.name.endsWith('.png')) {
+    let embeddedImg;
+    if (file.type.includes('png') || file.name.toLowerCase().endsWith('.png')) {
       embeddedImg = await pdfDoc.embedPng(imgBytes);
     } else {
       embeddedImg = await pdfDoc.embedJpg(imgBytes);
     }
 
     if (embeddedImg) {
-      const page = pdfDoc.addPage([embeddedImg.width, embeddedImg.height]);
-      
+      let pageWidth, pageHeight;
+
+      if (pageSize === 'fit') {
+        pageWidth = embeddedImg.width + marginPt * 2;
+        pageHeight = embeddedImg.height + marginPt * 2;
+        if (orientation === 'landscape' && pageHeight > pageWidth) {
+          [pageWidth, pageHeight] = [pageHeight, pageWidth];
+        }
+      } else {
+        const base = PAGE_SIZES[pageSize] || PAGE_SIZES.a4;
+        if (orientation === 'landscape') {
+          pageWidth = Math.max(base.width, base.height);
+          pageHeight = Math.min(base.width, base.height);
+        } else {
+          pageWidth = Math.min(base.width, base.height);
+          pageHeight = Math.max(base.width, base.height);
+        }
+      }
+
+      const page = pdfDoc.addPage([pageWidth, pageHeight]);
+
       if (customRotation !== 0) {
         page.setRotation(degrees(customRotation));
       }
 
+      const availableWidth = pageWidth - marginPt * 2;
+      const availableHeight = pageHeight - marginPt * 2;
+      const scale = Math.min(
+        availableWidth / embeddedImg.width,
+        availableHeight / embeddedImg.height
+      );
+
+      const drawWidth = embeddedImg.width * scale;
+      const drawHeight = embeddedImg.height * scale;
+      const drawX = marginPt + (availableWidth - drawWidth) / 2;
+      const drawY = marginPt + (availableHeight - drawHeight) / 2;
+
       page.drawImage(embeddedImg, {
-        x: 0,
-        y: 0,
-        width: embeddedImg.width,
-        height: embeddedImg.height,
+        x: drawX,
+        y: drawY,
+        width: drawWidth,
+        height: drawHeight,
       });
     }
   }
@@ -375,7 +506,9 @@ export async function imagesToPDF(imageItems) {
   const bytes = await pdfDoc.save({ useObjectStreams: true });
   return {
     blob: new Blob([bytes], { type: 'application/pdf' }),
-    filename: 'converted_images.pdf'
+    filename: 'converted_images.pdf',
+    originalSize: imageItems.reduce((acc, cur) => acc + (cur.file?.size || 0), 0),
+    compressedSize: bytes.byteLength,
   };
 }
 
