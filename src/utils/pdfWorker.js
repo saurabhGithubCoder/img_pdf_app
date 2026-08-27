@@ -1,4 +1,4 @@
-import { PDFDocument, degrees } from 'pdf-lib';
+import { PDFDocument, degrees, rgb, StandardFonts } from 'pdf-lib';
 import * as pdfjsLib from 'pdfjs-dist';
 import JSZip from 'jszip';
 
@@ -947,8 +947,6 @@ export async function convertPdfToExcel(file) {
     compressedSize: xlsxBlob.size,
   };
 }
-
-import { rgb, StandardFonts } from 'pdf-lib';
 
 /**
  * Add customizable page numbers to a PDF document.
