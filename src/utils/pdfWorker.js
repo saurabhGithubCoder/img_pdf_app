@@ -1094,3 +1094,170 @@ export async function addPageNumbersToPDF(file, options) {
     compressedSize: pdfBytes.byteLength,
   };
 }
+
+
+/**
+ * Add text or image watermark to a PDF.
+ * @param {File} file - Target PDF file
+ * @param {Object} options - Watermark settings
+ */
+export async function addWatermarkToPDF(file, options) {
+  const isLocked = await checkPdfPassword(file);
+  if (isLocked) {
+    const err = new Error(`Cannot process: "${file.name}" is password-protected or encrypted.`);
+    err.lockedFiles = [file.name];
+    throw err;
+  }
+
+  const {
+    type = 'text', // 'text' | 'image'
+    text = 'CONFIDENTIAL',
+    imageFile = null,
+    position = 'middle-center',
+    isMosaic = false,
+    opacity = 0.5,
+    rotation = 45,
+    fromPage = 1,
+    toPage = 1,
+    layer = 'over', // 'over' | 'below'
+    fontFamily = 'Helvetica',
+    fontSize = 36,
+    isBold = false,
+    isItalic = false,
+    isUnderline = false,
+    color = '#E11D48',
+  } = options;
+
+  const arrayBuffer = await file.arrayBuffer();
+  const pdfDoc = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
+  const totalPages = pdfDoc.getPageCount();
+
+  // 1. Embed Font (if text watermark)
+  let fontRef;
+  if (type === 'text') {
+    if (fontFamily === 'Times') {
+      if (isBold && isItalic) fontRef = await pdfDoc.embedFont(StandardFonts.TimesRomanBoldItalic);
+      else if (isBold) fontRef = await pdfDoc.embedFont(StandardFonts.TimesRomanBold);
+      else if (isItalic) fontRef = await pdfDoc.embedFont(StandardFonts.TimesRomanItalic);
+      else fontRef = await pdfDoc.embedFont(StandardFonts.TimesRoman);
+    } else if (fontFamily === 'Courier') {
+      if (isBold && isItalic) fontRef = await pdfDoc.embedFont(StandardFonts.CourierBoldOblique);
+      else if (isBold) fontRef = await pdfDoc.embedFont(StandardFonts.CourierBold);
+      else if (isItalic) fontRef = await pdfDoc.embedFont(StandardFonts.CourierOblique);
+      else fontRef = await pdfDoc.embedFont(StandardFonts.Courier);
+    } else {
+      if (isBold && isItalic) fontRef = await pdfDoc.embedFont(StandardFonts.HelveticaBoldOblique);
+      else if (isBold) fontRef = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+      else if (isItalic) fontRef = await pdfDoc.embedFont(StandardFonts.HelveticaOblique);
+      else fontRef = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    }
+  }
+
+  // 2. Embed Image (if image watermark)
+  let embeddedImg = null;
+  if (type === 'image' && imageFile) {
+    const imgBuffer = await imageFile.arrayBuffer();
+    if (imageFile.type.includes('png') || imageFile.name.toLowerCase().endsWith('.png')) {
+      embeddedImg = await pdfDoc.embedPng(imgBuffer);
+    } else {
+      embeddedImg = await pdfDoc.embedJpg(imgBuffer);
+    }
+  }
+
+  // Parse Color
+  const hex = color.replace('#', '');
+  const r = parseInt(hex.substring(0, 2), 16) / 255 || 0.88;
+  const g = parseInt(hex.substring(2, 4), 16) / 255 || 0.11;
+  const b = parseInt(hex.substring(4, 6), 16) / 255 || 0.28;
+  const textColor = rgb(r, g, b);
+
+  const startPage = Math.max(1, Math.min(fromPage, totalPages));
+  const endPage = Math.min(totalPages, Math.max(startPage, toPage));
+
+  for (let i = startPage - 1; i <= endPage - 1; i++) {
+    const page = pdfDoc.getPage(i);
+    const { width, height } = page.getSize();
+
+    const drawSingle = (cx, cy) => {
+      if (type === 'text' && fontRef) {
+        const textWidth = fontRef.widthOfTextAtSize(text || '', fontSize);
+        const textHeight = fontRef.heightAtSize(fontSize);
+        const rad = (rotation * Math.PI) / 180;
+
+        // Offset center to align rotation around text middle
+        const drawX = cx - (textWidth / 2) * Math.cos(rad) + (textHeight / 2) * Math.sin(rad);
+        const drawY = cy - (textWidth / 2) * Math.sin(rad) - (textHeight / 2) * Math.cos(rad);
+
+        page.drawText(text || '', {
+          x: drawX,
+          y: drawY,
+          size: fontSize,
+          font: fontRef,
+          color: textColor,
+          opacity: opacity,
+          rotate: degrees(rotation),
+        });
+
+        if (isUnderline) {
+          page.drawLine({
+            start: { x: drawX, y: drawY - 2 },
+            end: { x: drawX + textWidth * Math.cos(rad), y: drawY + textWidth * Math.sin(rad) - 2 },
+            thickness: 1.2,
+            color: textColor,
+            opacity: opacity,
+          });
+        }
+      } else if (type === 'image' && embeddedImg) {
+        const scaleFactor = Math.min(120 / embeddedImg.width, 120 / embeddedImg.height, 1);
+        const imgW = embeddedImg.width * scaleFactor;
+        const imgH = embeddedImg.height * scaleFactor;
+        const rad = (rotation * Math.PI) / 180;
+
+        const drawX = cx - (imgW / 2) * Math.cos(rad) + (imgH / 2) * Math.sin(rad);
+        const drawY = cy - (imgW / 2) * Math.sin(rad) - (imgH / 2) * Math.cos(rad);
+
+        page.drawImage(embeddedImg, {
+          x: drawX,
+          y: drawY,
+          width: imgW,
+          height: imgH,
+          opacity: opacity,
+          rotate: degrees(rotation),
+        });
+      }
+    };
+
+    if (isMosaic) {
+      // 3x3 Tile Grid across page
+      const cols = 3;
+      const rows = 3;
+      for (let c = 0; c < cols; c++) {
+        for (let rw = 0; rw < rows; rw++) {
+          const cx = (width / cols) * (c + 0.5);
+          const cy = (height / rows) * (rw + 0.5);
+          drawSingle(cx, cy);
+        }
+      }
+    } else {
+      // Position Matrix Coordinates
+      let cx = width / 2;
+      let cy = height / 2;
+
+      if (position.includes('left')) cx = width * 0.2;
+      else if (position.includes('right')) cx = width * 0.8;
+
+      if (position.startsWith('top')) cy = height * 0.8;
+      else if (position.startsWith('bottom')) cy = height * 0.2;
+
+      drawSingle(cx, cy);
+    }
+  }
+
+  const pdfBytes = await pdfDoc.save({ useObjectStreams: true });
+  return {
+    blob: new Blob([pdfBytes], { type: 'application/pdf' }),
+    filename: `watermarked_${file.name}`,
+    originalSize: file.size,
+    compressedSize: pdfBytes.byteLength,
+  };
+}

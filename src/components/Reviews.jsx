@@ -37,6 +37,13 @@ const REVIEWS = [
     comment: 'Splitting invoices and converting images to PDFs on mobile and desktop works smoothly every single time. An indispensable toolkit.',
     avatar: 'https://images.unsplash.com/photo-1492562080023-ab3db95bfbce?w=100&auto=format&fit=crop&q=80',
   },
+  {
+    name: 'Kukku',
+    role: 'Engineer',
+    rating: 5,
+    comment: 'Every other tool on internet limits your productivity with subscriptions & seesions. Thanks to Saurabh & PDF Forge, for making it free and full of easy to work upon tools.',
+    avatar: 'https://images.unsplash.com/photo-1492562080023-ab3db95bfbce?w=100&auto=format&fit=crop&q=80',
+  },
 ];
 
 export default function Reviews() {

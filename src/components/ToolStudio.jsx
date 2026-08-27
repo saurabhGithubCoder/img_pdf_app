@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   ArrowLeft,
   CheckCircle2,
@@ -19,7 +19,12 @@ import {
   Code,
   Info,
   SlidersHorizontal,
-  Plus
+  Plus,
+  Type,
+  Presentation,
+  Sheet,
+  FileCode,
+  RefreshCw
 } from 'lucide-react';
 import {
   mergePDFs,
@@ -41,7 +46,11 @@ import {
   convertPdfToPowerpoint,
   convertPdfToExcel,
   addPageNumbersToPDF,
-  checkPdfPassword
+  addWatermarkToPDF,
+  checkPdfPassword,
+  checkDocxPassword,
+  checkPptxPassword,
+  checkExcelPassword
 } from '../utils/pdfWorker';
 
 export default function ToolStudio({ tool, initialFiles, initialImageCards, initialHtmlCode, initialHtmlMode, onBack }) {
@@ -54,6 +63,9 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
   const [result, setResult] = useState(null);
   const [errorMsg, setErrorMsg] = useState('');
 
+  // Hidden file input ref for "Change Document" action
+  const changeFileInputRef = useRef(null);
+
   // Compression tool settings
   const [compressionPercent, setCompressionPercent] = useState(45);
 
@@ -63,7 +75,8 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
     tool.id === 'extract' ||
     tool.id === 'organize' ||
     tool.id === 'rotate' ||
-    tool.id === 'page-numbers';
+    tool.id === 'page-numbers' ||
+    tool.id === 'watermark';
 
   const [thumbnails, setThumbnails] = useState([]);
   const [totalPages, setTotalPages] = useState(0);
@@ -91,6 +104,27 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
     color: '#334155'
   });
 
+  // Add Watermark Options State
+  const [watermarkOptions, setWatermarkOptions] = useState({
+    type: 'text',
+    text: 'CONFIDENTIAL',
+    imageFile: null,
+    imagePreviewUrl: '',
+    position: 'middle-center',
+    isMosaic: false,
+    opacity: 1.0,
+    rotation: 0,
+    fromPage: 1,
+    toPage: 1,
+    layer: 'over',
+    fontFamily: 'Helvetica',
+    fontSize: 32,
+    isBold: false,
+    isItalic: false,
+    isUnderline: false,
+    color: '#E11D48'
+  });
+
   useEffect(() => {
     if (isPageLevelTool && files.length > 0) {
       loadDocumentThumbnails(files[0]);
@@ -113,11 +147,56 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
         fromPage: 1,
         toPage: data.totalPages
       }));
+      setWatermarkOptions((prev) => ({
+        ...prev,
+        fromPage: 1,
+        toPage: data.totalPages
+      }));
     } catch (err) {
       setErrorMsg('Failed to read PDF pages. The file might be corrupted.');
     } finally {
       setIsRenderingPages(false);
     }
+  };
+
+  const getFileInputAccept = () => {
+    if (tool.id === 'jpg-to-pdf') return 'image/jpeg,image/png,image/webp';
+    if (tool.id === 'word-to-pdf') return '.docx,.doc,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword';
+    if (tool.id === 'powerpoint-to-pdf') return '.pptx,.ppt,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.ms-powerpoint';
+    if (tool.id === 'excel-to-pdf') return '.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel';
+    if (tool.id === 'html-to-pdf') return '.html,.htm,text/html';
+    return 'application/pdf';
+  };
+
+  // Directly replaces the document in place with security checking
+  const handleReplaceDocument = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setErrorMsg('');
+
+    let isLocked = false;
+    if (file.name.toLowerCase().endsWith('.pdf') || file.type === 'application/pdf') {
+      isLocked = await checkPdfPassword(file);
+    } else if (tool.id === 'word-to-pdf') {
+      isLocked = await checkDocxPassword(file);
+    } else if (tool.id === 'powerpoint-to-pdf') {
+      isLocked = await checkPptxPassword(file);
+    } else if (tool.id === 'excel-to-pdf') {
+      isLocked = await checkExcelPassword(file);
+    }
+
+    if (isLocked) {
+      setErrorMsg(`Cannot process: "${file.name}" is password-protected or encrypted.`);
+      return;
+    }
+
+    setFiles([file]);
+    if (result?.url) {
+      URL.revokeObjectURL(result.url);
+      setResult(null);
+    }
+    // Reset file input value so selecting the same file again triggers onChange
+    e.target.value = '';
   };
 
   const handleAddMorePdfs = async (e) => {
@@ -134,6 +213,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
     }
 
     setFiles((prev) => [...prev, ...newFiles]);
+    e.target.value = '';
   };
 
   const handleAddMoreImages = (e) => {
@@ -146,6 +226,18 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
     }));
     setImageCards((prev) => [...prev, ...addedList]);
     setFiles((prev) => [...prev, ...Array.from(e.target.files)]);
+    e.target.value = '';
+  };
+
+  const handleWatermarkImageUpload = (e) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      setWatermarkOptions((prev) => ({
+        ...prev,
+        imageFile: file,
+        imagePreviewUrl: URL.createObjectURL(file)
+      }));
+    }
   };
 
   const handleImageDragStart = (e, index) => {
@@ -315,11 +407,19 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
       return;
     }
 
+    if (tool.id === 'watermark' && watermarkOptions.type === 'image' && !watermarkOptions.imageFile) {
+      setErrorMsg('Please select an image file to use as the watermark.');
+      return;
+    }
+
     setIsProcessing(true);
 
     try {
       let output;
       switch (tool.id) {
+        case 'watermark':
+          output = await addWatermarkToPDF(files[0], watermarkOptions);
+          break;
         case 'page-numbers':
           output = await addPageNumbersToPDF(files[0], pageNumberOptions);
           break;
@@ -400,12 +500,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
     return `${(bytes / (k * k)).toFixed(2)} MB`;
   };
 
-  const getPositionDotClasses = (pos, isFacing, pageIdx) => {
-    let active = pos;
-    if (isFacing && (pageIdx + 1) % 2 === 0) {
-      if (pos.includes('right')) active = pos.replace('right', 'left');
-      else if (pos.includes('left')) active = pos.replace('left', 'right');
-    }
+  const getPositionDotClasses = (pos) => {
     const map = {
       'top-left': 'top-2.5 left-2.5',
       'top-center': 'top-2.5 left-1/2 -translate-x-1/2',
@@ -417,11 +512,89 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
       'bottom-center': 'bottom-2.5 left-1/2 -translate-x-1/2',
       'bottom-right': 'bottom-2.5 right-2.5'
     };
-    return map[active] || 'bottom-2.5 right-2.5';
+    return map[pos] || 'top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2';
+  };
+
+  // Helper to render customized visual card thumbnail for single file conversions
+  const renderSingleFileThumbnailCard = (file) => {
+    let IconComp = FileText;
+    let badgeText = 'DOC';
+    let badgeColor = 'bg-blue-600 text-white';
+    let borderColor = 'border-blue-200';
+    let bgGradient = 'from-blue-50/50 to-slate-50';
+
+    if (tool.id === 'powerpoint-to-pdf') {
+      IconComp = Presentation;
+      badgeText = 'PPT';
+      badgeColor = 'bg-orange-600 text-white';
+      borderColor = 'border-orange-200';
+      bgGradient = 'from-orange-50/50 to-slate-50';
+    } else if (tool.id === 'excel-to-pdf') {
+      IconComp = Sheet;
+      badgeText = 'XLS';
+      badgeColor = 'bg-emerald-600 text-white';
+      borderColor = 'border-emerald-200';
+      bgGradient = 'from-emerald-50/50 to-slate-50';
+    } else if (tool.id === 'html-to-pdf') {
+      IconComp = FileCode;
+      badgeText = 'HTML';
+      badgeColor = 'bg-amber-600 text-white';
+      borderColor = 'border-amber-200';
+      bgGradient = 'from-amber-50/50 to-slate-50';
+    }
+
+    return (
+      <div className={`relative mx-auto w-56 sm:w-64 rounded-2xl border-2 ${borderColor} bg-gradient-to-b ${bgGradient} p-5 shadow-sm text-center flex flex-col items-center justify-between space-y-4`}>
+        <div className="absolute top-3 right-3">
+          <span className={`text-[10px] font-black px-2 py-0.5 rounded-md ${badgeColor}`}>
+            {badgeText}
+          </span>
+        </div>
+
+        {/* Thumbnail Illustration */}
+        <div className="w-20 h-28 bg-white border border-slate-200 rounded-xl shadow-xs flex flex-col items-center justify-center p-3 relative mt-2">
+          <div className="w-full space-y-1.5 opacity-40">
+            <div className="h-1.5 bg-slate-400 rounded-full w-3/4" />
+            <div className="h-1.5 bg-slate-300 rounded-full w-full" />
+            <div className="h-1.5 bg-slate-300 rounded-full w-5/6" />
+            <div className="h-1.5 bg-slate-200 rounded-full w-1/2" />
+          </div>
+          <IconComp className="w-7 h-7 absolute inset-0 m-auto text-slate-700 opacity-90" />
+        </div>
+
+        <div className="w-full space-y-1">
+          <p className="font-bold text-xs text-slate-800 truncate px-2" title={file.name}>
+            {file.name}
+          </p>
+          <p className="text-[11px] font-medium text-slate-400">
+            {formatFileSize(file.size)}
+          </p>
+        </div>
+
+        {/* Triggers in-place file dialog prompt */}
+        <button
+          type="button"
+          onClick={() => changeFileInputRef.current?.click()}
+          className="text-[11px] font-bold text-rose-600 hover:text-rose-700 transition flex items-center space-x-1.5 bg-white hover:bg-rose-50 border border-slate-200 px-3 py-1.5 rounded-xl shadow-xs cursor-pointer"
+        >
+          <RefreshCw className="w-3.5 h-3.5" />
+          <span>Change Document</span>
+        </button>
+      </div>
+    );
   };
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 pb-20">
+      {/* Hidden File Input for in-place document change */}
+      <input
+        type="file"
+        ref={changeFileInputRef}
+        accept={getFileInputAccept()}
+        className="hidden"
+        onChange={handleReplaceDocument}
+      />
+
       {/* Top Studio Bar */}
       <header className="sticky top-0 z-30 bg-white/90 backdrop-blur-md border-b border-slate-200">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
@@ -477,13 +650,303 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
               </div>
             )}
 
-            {/* 1. Page Numbers Studio */}
+            {/* 1. Watermark Studio */}
+            {tool.id === 'watermark' && (
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+                <div className="lg:col-span-8 bg-white border border-slate-200 rounded-3xl p-6 shadow-sm">
+                  <div className="flex items-center justify-between pb-4 border-b border-slate-100 text-xs font-semibold">
+                    <span className="text-slate-600">{files[0]?.name} ({totalPages} Pages)</span>
+                    <button
+                      type="button"
+                      onClick={() => changeFileInputRef.current?.click()}
+                      className="text-rose-600 hover:text-rose-700 font-bold flex items-center space-x-1 cursor-pointer"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      <span>Change File</span>
+                    </button>
+                  </div>
+
+                  {isRenderingPages ? (
+                    <div className="py-32 text-center text-slate-400 space-y-2">
+                      <Loader2 className="w-8 h-8 animate-spin mx-auto text-fuchsia-500" />
+                      <p className="text-sm">Rendering document preview...</p>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 pt-4 max-h-[560px] overflow-y-auto pr-1">
+                      {thumbnails.map((thumb, idx) => {
+                        const inRange =
+                          thumb.pageNumber >= watermarkOptions.fromPage &&
+                          thumb.pageNumber <= watermarkOptions.toPage;
+                        return (
+                          <div
+                            key={thumb.id}
+                            className="relative rounded-2xl border-2 border-slate-200 bg-slate-50 shadow-xs overflow-hidden p-3 flex flex-col items-center justify-center min-h-[200px]"
+                          >
+                            <img src={thumb.dataUrl} alt={`Page ${idx + 1}`} className="max-h-44 object-contain shadow-sm bg-white" />
+                            {inRange && !watermarkOptions.isMosaic && (
+                              <div
+                                className={`absolute w-4 h-4 bg-rose-500 rounded-full shadow-md border-2 border-white transition-all duration-150 ${getPositionDotClasses(
+                                  watermarkOptions.position
+                                )}`}
+                              />
+                            )}
+                            {inRange && watermarkOptions.isMosaic && (
+                              <div className="absolute inset-0 grid grid-cols-3 grid-rows-3 p-4 pointer-events-none">
+                                {[...Array(9)].map((_, dotIdx) => (
+                                  <div key={dotIdx} className="flex items-center justify-center">
+                                    <div className="w-2.5 h-2.5 bg-rose-500/80 rounded-full border border-white" />
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                            <span className="absolute bottom-2 right-2 text-[10px] font-bold px-2 py-0.5 rounded bg-slate-800/80 text-white">
+                              {idx + 1}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                <div className="lg:col-span-4 bg-white border border-slate-200 rounded-3xl p-6 space-y-4 shadow-sm text-xs">
+                  <h3 className="font-bold text-slate-900 text-sm border-b pb-3">Watermark options</h3>
+
+                  <div className="grid grid-cols-2 gap-2 p-1 bg-slate-100 rounded-2xl">
+                    <button
+                      type="button"
+                      onClick={() => setWatermarkOptions({ ...watermarkOptions, type: 'text' })}
+                      className={`py-2 rounded-xl font-bold flex items-center justify-center space-x-1.5 transition ${
+                        watermarkOptions.type === 'text' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-500 hover:text-slate-800'
+                      }`}
+                    >
+                      <Type className="w-4 h-4 text-rose-500" />
+                      <span>Place text</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setWatermarkOptions({ ...watermarkOptions, type: 'image' })}
+                      className={`py-2 rounded-xl font-bold flex items-center justify-center space-x-1.5 transition ${
+                        watermarkOptions.type === 'image' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-500 hover:text-slate-800'
+                      }`}
+                    >
+                      <ImageIcon className="w-4 h-4 text-rose-500" />
+                      <span>Place image</span>
+                    </button>
+                  </div>
+
+                  {watermarkOptions.type === 'text' ? (
+                    <div className="space-y-3">
+                      <div>
+                        <label className="font-semibold text-slate-700 block mb-1">Text:</label>
+                        <input
+                          type="text"
+                          value={watermarkOptions.text}
+                          onChange={(e) => setWatermarkOptions({ ...watermarkOptions, text: e.target.value })}
+                          className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-medium focus:outline-none focus:ring-2 focus:ring-rose-500/20"
+                        />
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="font-semibold text-slate-700 block text-[11px]">Text format:</label>
+                        <div className="flex items-center space-x-2">
+                          <select
+                            value={watermarkOptions.fontFamily}
+                            onChange={(e) => setWatermarkOptions({ ...watermarkOptions, fontFamily: e.target.value })}
+                            className="px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs flex-1"
+                          >
+                            <option value="Helvetica">Arial / Helvetica</option>
+                            <option value="Times">Times New Roman</option>
+                            <option value="Courier">Courier</option>
+                          </select>
+
+                          <div className="flex items-center space-x-0.5 border border-slate-200 rounded-lg p-0.5 bg-slate-50">
+                            <button
+                              type="button"
+                              onClick={() => setWatermarkOptions({ ...watermarkOptions, isBold: !watermarkOptions.isBold })}
+                              className={`px-2 py-1 font-bold rounded ${watermarkOptions.isBold ? 'bg-rose-500 text-white' : 'text-slate-600'}`}
+                            >
+                              B
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setWatermarkOptions({ ...watermarkOptions, isItalic: !watermarkOptions.isItalic })}
+                              className={`px-2 py-1 italic rounded ${watermarkOptions.isItalic ? 'bg-rose-500 text-white' : 'text-slate-600'}`}
+                            >
+                              I
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setWatermarkOptions({ ...watermarkOptions, isUnderline: !watermarkOptions.isUnderline })}
+                              className={`px-2 py-1 underline rounded ${watermarkOptions.isUnderline ? 'bg-rose-500 text-white' : 'text-slate-600'}`}
+                            >
+                              U
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div>
+                      <label className="font-semibold text-slate-700 block mb-1">Image:</label>
+                      <label className="flex items-center justify-center space-x-2 p-3 bg-rose-50 hover:bg-rose-100 border-2 border-dashed border-rose-300 text-rose-700 font-bold rounded-2xl cursor-pointer transition">
+                        <ImageIcon className="w-4 h-4" />
+                        <span>{watermarkOptions.imageFile ? watermarkOptions.imageFile.name : 'ADD IMAGE'}</span>
+                        <input
+                          type="file"
+                          accept="image/png,image/jpeg"
+                          onChange={handleWatermarkImageUpload}
+                          className="hidden"
+                        />
+                      </label>
+                    </div>
+                  )}
+
+                  <div className="space-y-1.5 pt-2 border-t border-slate-100">
+                    <label className="font-semibold text-slate-700 block">Position:</label>
+                    <div className="flex items-center space-x-4">
+                      <div className="grid grid-cols-3 gap-1 w-20 h-20 border border-slate-300 rounded-xl p-1 bg-slate-50">
+                        {[
+                          'top-left', 'top-center', 'top-right',
+                          'middle-left', 'middle-center', 'middle-right',
+                          'bottom-left', 'bottom-center', 'bottom-right'
+                        ].map((pos) => (
+                          <button
+                            key={pos}
+                            type="button"
+                            disabled={watermarkOptions.isMosaic}
+                            onClick={() => setWatermarkOptions({ ...watermarkOptions, position: pos })}
+                            className={`rounded-md transition-colors flex items-center justify-center ${
+                              watermarkOptions.position === pos && !watermarkOptions.isMosaic
+                                ? 'bg-rose-500 text-white shadow-xs'
+                                : 'bg-white hover:bg-slate-200 border border-slate-200'
+                            }`}
+                          >
+                            <span className={`w-1.5 h-1.5 rounded-full ${watermarkOptions.position === pos && !watermarkOptions.isMosaic ? 'bg-white' : 'bg-slate-400'}`} />
+                          </button>
+                        ))}
+                      </div>
+
+                      <label className="flex items-center space-x-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={watermarkOptions.isMosaic}
+                          onChange={(e) => setWatermarkOptions({ ...watermarkOptions, isMosaic: e.target.checked })}
+                          className="w-4 h-4 rounded accent-rose-500"
+                        />
+                        <span className="font-bold text-slate-700">Mosaic</span>
+                      </label>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3 pt-2 border-t border-slate-100">
+                    <div>
+                      <label className="font-semibold text-slate-700 block mb-1">Transparency:</label>
+                      <select
+                        value={watermarkOptions.opacity}
+                        onChange={(e) => setWatermarkOptions({ ...watermarkOptions, opacity: parseFloat(e.target.value) })}
+                        className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs"
+                      >
+                        <option value="1.0">No transparency</option>
+                        <option value="0.75">25% (Light)</option>
+                        <option value="0.5">50% (Recommended)</option>
+                        <option value="0.25">75% (Faint)</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="font-semibold text-slate-700 block mb-1">Rotation:</label>
+                      <select
+                        value={watermarkOptions.rotation}
+                        onChange={(e) => setWatermarkOptions({ ...watermarkOptions, rotation: parseInt(e.target.value, 10) })}
+                        className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs"
+                      >
+                        <option value="0">Do not rotate</option>
+                        <option value="45">45 Degrees</option>
+                        <option value="90">90 Degrees</option>
+                        <option value="180">180 Degrees</option>
+                        <option value="270">270 Degrees</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="pt-2 border-t border-slate-100">
+                    <label className="font-semibold text-slate-700 block mb-1">Pages:</label>
+                    <div className="flex items-center space-x-2">
+                      <span className="text-slate-500">from page</span>
+                      <input
+                        type="number"
+                        min="1"
+                        max={totalPages}
+                        value={watermarkOptions.fromPage}
+                        onChange={(e) => setWatermarkOptions({ ...watermarkOptions, fromPage: Math.max(1, parseInt(e.target.value, 10) || 1) })}
+                        className="w-14 px-2 py-1 text-center bg-slate-50 border border-slate-200 rounded-lg font-medium"
+                      />
+                      <span className="text-slate-500">to</span>
+                      <input
+                        type="number"
+                        min="1"
+                        max={totalPages}
+                        value={watermarkOptions.toPage}
+                        onChange={(e) => setWatermarkOptions({ ...watermarkOptions, toPage: Math.min(totalPages, parseInt(e.target.value, 10) || totalPages) })}
+                        className="w-14 px-2 py-1 text-center bg-slate-50 border border-slate-200 rounded-lg font-medium"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="pt-2 border-t border-slate-100 space-y-1.5">
+                    <label className="font-semibold text-slate-700 block">Layer:</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setWatermarkOptions({ ...watermarkOptions, layer: 'over' })}
+                        className={`p-2.5 rounded-xl border text-center transition ${
+                          watermarkOptions.layer === 'over'
+                            ? 'border-rose-500 bg-rose-50 text-rose-700 font-bold'
+                            : 'border-slate-200 bg-slate-50 text-slate-600'
+                        }`}
+                      >
+                        Over the PDF content
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setWatermarkOptions({ ...watermarkOptions, layer: 'below' })}
+                        className={`p-2.5 rounded-xl border text-center transition ${
+                          watermarkOptions.layer === 'below'
+                            ? 'border-rose-500 bg-rose-50 text-rose-700 font-bold'
+                            : 'border-slate-200 bg-slate-50 text-slate-600'
+                        }`}
+                      >
+                        Below the PDF content
+                      </button>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={executeAction}
+                    disabled={isProcessing || isRenderingPages}
+                    className="w-full py-3.5 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-2xl shadow-md transition flex items-center justify-center space-x-2"
+                  >
+                    {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <><span>Add watermark</span><ArrowRight className="w-4 h-4" /></>}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* 2. Page Numbers Studio */}
             {tool.id === 'page-numbers' && (
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
                 <div className="lg:col-span-8 bg-white border border-slate-200 rounded-3xl p-6 shadow-sm">
                   <div className="flex items-center justify-between pb-4 border-b border-slate-100 text-xs font-semibold">
                     <span className="text-slate-600">{files[0]?.name} ({totalPages} Pages)</span>
-                    <span className="text-slate-400">Preview with Active Placement Marker</span>
+                    <button
+                      type="button"
+                      onClick={() => changeFileInputRef.current?.click()}
+                      className="text-rose-600 hover:text-rose-700 font-bold flex items-center space-x-1 cursor-pointer"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      <span>Change File</span>
+                    </button>
                   </div>
 
                   {isRenderingPages ? (
@@ -506,9 +969,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                             {inRange && (
                               <div
                                 className={`absolute w-4 h-4 bg-rose-500 rounded-full shadow-md border-2 border-white transition-all duration-150 ${getPositionDotClasses(
-                                  pageNumberOptions.position,
-                                  pageNumberOptions.pageMode === 'facing',
-                                  idx
+                                  pageNumberOptions.position
                                 )}`}
                               />
                             )}
@@ -703,7 +1164,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
               </div>
             )}
 
-            {/* 2. Rotate PDF Studio */}
+            {/* 3. Rotate PDF Studio */}
             {tool.id === 'rotate' && (
               <div className="bg-white border border-slate-200 rounded-3xl p-6 space-y-6 shadow-sm">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 bg-purple-50 rounded-2xl border border-purple-100 text-xs">
@@ -728,6 +1189,14 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                     >
                       <RotateCcw className="w-4 h-4" />
                       <span>-90°</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => changeFileInputRef.current?.click()}
+                      className="px-3 py-2 bg-white hover:bg-purple-100 text-purple-700 border border-purple-200 rounded-xl font-semibold transition flex items-center space-x-1"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      <span>Change</span>
                     </button>
                   </div>
                 </div>
@@ -757,10 +1226,20 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
               </div>
             )}
 
-            {/* 3. Organize PDF Studio */}
+            {/* 4. Organize PDF Studio */}
             {tool.id === 'organize' && (
               <div className="bg-white border border-slate-200 rounded-3xl p-6 space-y-6 shadow-sm">
-                <div className="text-xs text-slate-500 font-medium">Drag & drop pages to rearrange. Hover to rotate or delete individual pages.</div>
+                <div className="flex items-center justify-between text-xs text-slate-500 font-medium">
+                  <span>Drag & drop pages to rearrange. Hover to rotate or delete individual pages.</span>
+                  <button
+                    type="button"
+                    onClick={() => changeFileInputRef.current?.click()}
+                    className="text-amber-700 hover:text-amber-800 font-bold flex items-center space-x-1 cursor-pointer"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>Change File</span>
+                  </button>
+                </div>
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
                   {thumbnails.map((thumb, idx) => (
                     <div
@@ -793,19 +1272,27 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
               </div>
             )}
 
-            {/* 4. Remove / Extract Pages Studio */}
+            {/* 5. Remove / Extract Pages Studio */}
             {(tool.id === 'remove' || tool.id === 'extract') && (
               <div className="bg-white border border-slate-200 rounded-3xl p-6 space-y-6 shadow-sm">
-                <div className="space-y-2">
-                  <label className="text-xs font-bold text-slate-700">Pages to {tool.id === 'remove' ? 'remove' : 'extract'} (Type range or click thumbnails):</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. 1, 3-5, 8"
-                    value={rangeInput}
-                    onChange={handleRangeInputChange}
-                    className="w-full px-4 py-3 bg-slate-50 rounded-2xl border border-slate-200 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-rose-500/20"
-                  />
+                <div className="flex items-center justify-between text-xs font-bold text-slate-700">
+                  <span>Pages to {tool.id === 'remove' ? 'remove' : 'extract'} (Type range or click thumbnails):</span>
+                  <button
+                    type="button"
+                    onClick={() => changeFileInputRef.current?.click()}
+                    className="text-rose-600 hover:text-rose-700 font-bold flex items-center space-x-1 cursor-pointer"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>Change File</span>
+                  </button>
                 </div>
+                <input
+                  type="text"
+                  placeholder="e.g. 1, 3-5, 8"
+                  value={rangeInput}
+                  onChange={handleRangeInputChange}
+                  className="w-full px-4 py-3 bg-slate-50 rounded-2xl border border-slate-200 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-rose-500/20"
+                />
 
                 <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-4">
                   {thumbnails.map((thumb) => {
@@ -849,7 +1336,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
               </div>
             )}
 
-            {/* 5. Compress PDF Studio */}
+            {/* 6. Compress PDF Studio */}
             {tool.id === 'compress' && (
               <div className="bg-white border border-slate-200 rounded-3xl p-8 max-w-2xl mx-auto space-y-6 shadow-sm">
                 <div className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl border border-slate-200 text-xs">
@@ -858,6 +1345,14 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                     <span className="font-bold text-slate-800 truncate">{files[0]?.name}</span>
                     <span className="text-slate-400 font-medium">({formatFileSize(files[0]?.size)})</span>
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => changeFileInputRef.current?.click()}
+                    className="text-emerald-700 hover:text-emerald-800 font-bold flex items-center space-x-1 cursor-pointer"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>Change File</span>
+                  </button>
                 </div>
 
                 <div className="space-y-3">
@@ -908,7 +1403,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
               </div>
             )}
 
-            {/* 6. JPG to PDF Studio */}
+            {/* 7. JPG to PDF Studio */}
             {tool.id === 'jpg-to-pdf' && (
               <div className="bg-white border border-slate-200 rounded-3xl p-6 space-y-6 shadow-sm">
                 <div className="flex items-center justify-between">
@@ -958,29 +1453,69 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
               </div>
             )}
 
-            {/* 7. Default File Workspace (Merge PDF & Conversions) */}
-            {!['page-numbers', 'rotate', 'organize', 'remove', 'extract', 'compress', 'jpg-to-pdf'].includes(tool.id) && (
+            {/* 8. Single File Conversions (Word to PDF, PPT to PDF, Excel to PDF, HTML to PDF) */}
+            {['word-to-pdf', 'powerpoint-to-pdf', 'excel-to-pdf', 'html-to-pdf', 'pdf-to-word', 'pdf-to-powerpoint', 'pdf-to-excel', 'pdf-to-jpg', 'to-markdown'].includes(tool.id) && (
+              <div className="bg-white border border-slate-200 rounded-3xl p-8 max-w-lg mx-auto space-y-6 shadow-sm">
+                <div className="space-y-4">
+                  <div className="text-center font-bold text-xs uppercase tracking-wider text-slate-400">
+                    Uploaded Document
+                  </div>
+
+                  {files[0] && renderSingleFileThumbnailCard(files[0])}
+
+                  {tool.id === 'html-to-pdf' && htmlInputMode === 'code' && (
+                    <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl font-mono text-xs text-slate-600 truncate">
+                      {rawHtmlCode.substring(0, 100)}...
+                    </div>
+                  )}
+                </div>
+
+                <button
+                  onClick={executeAction}
+                  disabled={isProcessing}
+                  className={`w-full py-4 text-white font-bold rounded-2xl shadow-md transition flex items-center justify-center space-x-2 ${
+                    tool.id === 'word-to-pdf' || tool.id === 'pdf-to-word' ? 'bg-blue-600 hover:bg-blue-700' :
+                    tool.id === 'powerpoint-to-pdf' || tool.id === 'pdf-to-powerpoint' ? 'bg-orange-600 hover:bg-orange-700' :
+                    tool.id === 'excel-to-pdf' || tool.id === 'pdf-to-excel' ? 'bg-emerald-600 hover:bg-emerald-700' :
+                    tool.id === 'html-to-pdf' ? 'bg-amber-600 hover:bg-amber-700' : 'bg-rose-600 hover:bg-rose-700'
+                  }`}
+                >
+                  {isProcessing ? (
+                    <div className="flex items-center space-x-2">
+                      <Loader2 className="w-4 h-4 animate-spin text-white" />
+                      <span>Converting document...</span>
+                    </div>
+                  ) : (
+                    <>
+                      <span>Convert to PDF</span>
+                      <ArrowRight className="w-4 h-4" />
+                    </>
+                  )}
+                </button>
+              </div>
+            )}
+
+            {/* 9. Merge PDF Multi-File Workspace */}
+            {tool.id === 'merge' && (
               <div className="bg-white border border-slate-200 rounded-3xl p-8 max-w-xl mx-auto space-y-6 shadow-sm">
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                      {tool.id === 'merge' ? `PDF Documents to Merge (${files.length})` : 'Target File(s)'}
+                      PDF Documents to Merge ({files.length})
                     </span>
 
-                    {tool.id === 'merge' && (
-                      <label htmlFor="studioAddMorePdfsInput" className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 font-bold rounded-xl text-xs cursor-pointer flex items-center gap-1 transition">
-                        <Plus className="w-3.5 h-3.5" />
-                        <span>Add More Files</span>
-                        <input
-                          type="file"
-                          id="studioAddMorePdfsInput"
-                          multiple
-                          accept="application/pdf"
-                          className="hidden"
-                          onChange={handleAddMorePdfs}
-                        />
-                      </label>
-                    )}
+                    <label htmlFor="studioAddMorePdfsInput" className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 font-bold rounded-xl text-xs cursor-pointer flex items-center gap-1 transition">
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Add More Files</span>
+                      <input
+                        type="file"
+                        id="studioAddMorePdfsInput"
+                        multiple
+                        accept="application/pdf"
+                        className="hidden"
+                        onChange={handleAddMorePdfs}
+                      />
+                    </label>
                   </div>
 
                   <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
@@ -992,18 +1527,16 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                           <span className="font-semibold text-slate-800 truncate">{file.name}</span>
                           <span className="text-slate-400 font-medium shrink-0">({formatFileSize(file.size)})</span>
                         </div>
-                        {tool.id === 'merge' && (
-                          <div className="flex items-center space-x-1 shrink-0">
-                            <button onClick={() => moveFileItem(idx, -1)} disabled={idx === 0} className="p-1 text-slate-500 hover:bg-slate-200 rounded disabled:opacity-20" title="Move Up"><ArrowUp className="w-3.5 h-3.5" /></button>
-                            <button onClick={() => moveFileItem(idx, 1)} disabled={idx === files.length - 1} className="p-1 text-slate-500 hover:bg-slate-200 rounded disabled:opacity-20" title="Move Down"><ArrowDown className="w-3.5 h-3.5" /></button>
-                            <button onClick={() => removeFileItem(idx)} className="p-1 text-rose-500 hover:bg-rose-50 rounded" title="Remove"><Trash2 className="w-3.5 h-3.5" /></button>
-                          </div>
-                        )}
+                        <div className="flex items-center space-x-1 shrink-0">
+                          <button onClick={() => moveFileItem(idx, -1)} disabled={idx === 0} className="p-1 text-slate-500 hover:bg-slate-200 rounded disabled:opacity-20" title="Move Up"><ArrowUp className="w-3.5 h-3.5" /></button>
+                          <button onClick={() => moveFileItem(idx, 1)} disabled={idx === files.length - 1} className="p-1 text-slate-500 hover:bg-slate-200 rounded disabled:opacity-20" title="Move Down"><ArrowDown className="w-3.5 h-3.5" /></button>
+                          <button onClick={() => removeFileItem(idx)} className="p-1 text-rose-500 hover:bg-rose-50 rounded" title="Remove"><Trash2 className="w-3.5 h-3.5" /></button>
+                        </div>
                       </div>
                     ))}
                   </div>
 
-                  {tool.id === 'merge' && files.length < 2 && (
+                  {files.length < 2 && (
                     <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 p-3 rounded-2xl font-medium">
                       At least 2 PDF files are required to merge. Please add more files using the button above.
                     </p>
@@ -1012,16 +1545,10 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
 
                 <button
                   onClick={executeAction}
-                  disabled={isProcessing || (tool.id === 'merge' && files.length < 2)}
-                  className={`w-full py-4 text-white font-bold rounded-2xl shadow-md transition flex items-center justify-center space-x-2 ${
-                    tool.id === 'merge' ? 'bg-rose-600 hover:bg-rose-700 disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed' :
-                    tool.id === 'pdf-to-word' ? 'bg-blue-600 hover:bg-blue-700' :
-                    tool.id === 'pdf-to-powerpoint' || tool.id === 'powerpoint-to-pdf' ? 'bg-orange-600 hover:bg-orange-700' :
-                    tool.id === 'pdf-to-excel' || tool.id === 'excel-to-pdf' ? 'bg-emerald-600 hover:bg-emerald-700' :
-                    tool.id === 'html-to-pdf' ? 'bg-amber-600 hover:bg-amber-700' : 'bg-rose-600 hover:bg-rose-700'
-                  }`}
+                  disabled={isProcessing || files.length < 2}
+                  className="w-full py-4 text-white font-bold rounded-2xl shadow-md transition flex items-center justify-center space-x-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
                 >
-                  {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <span>{tool.id === 'merge' ? `Merge ${files.length} PDFs` : 'Convert Now'}</span>}
+                  {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <span>Merge {files.length} PDFs</span>}
                 </button>
               </div>
             )}
