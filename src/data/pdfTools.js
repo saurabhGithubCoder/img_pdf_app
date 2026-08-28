@@ -86,8 +86,8 @@ export const PDF_CATEGORIES = [
   {
     title: 'PDF Security',
     tools: [
-      { id: 'unlock', name: 'Unlock PDF', desc: 'Remove passwords and permissions security.', icon: Unlock, color: 'text-blue-600', bg: 'bg-blue-50', inactive: true, badge: 'Coming Soon' },
-      { id: 'protect', name: 'Protect PDF', desc: 'Encrypt files with strong password protection.', icon: ShieldCheck, color: 'text-sky-600', bg: 'bg-sky-50', inactive: true, badge: 'Coming Soon' },
+      { id: 'unlock', name: 'Unlock PDF', desc: 'Remove passwords and permissions security.', icon: Unlock, color: 'text-blue-600', bg: 'bg-blue-50' },
+      { id: 'protect', name: 'Protect PDF', desc: 'Encrypt files with strong password protection.', icon: ShieldCheck, color: 'text-sky-600', bg: 'bg-sky-50' },
       { id: 'sign', name: 'Sign PDF', desc: 'Create digital signatures and sign agreements.', icon: PenTool, color: 'text-indigo-600', bg: 'bg-indigo-50', inactive: true, badge: 'Coming Soon' },
       { id: 'redact', name: 'Redact PDF', desc: 'Permanently blackout sensitive information.', icon: EyeOff, color: 'text-slate-700', bg: 'bg-slate-50', inactive: true, badge: 'Coming Soon' },
       { id: 'compare', name: 'Compare PDF', desc: 'Side-by-side visual and text diff comparison.', icon: GitCompare, color: 'text-cyan-600', bg: 'bg-cyan-50', inactive: true, badge: 'Coming Soon' },
@@ -98,7 +98,7 @@ export const PDF_CATEGORIES = [
     tools: [
       { id: 'summarizer', name: 'AI Summarizer', desc: 'Get key summaries and actionable insights instantly.', icon: Sparkles, color: 'text-indigo-500', bg: 'bg-indigo-50', inactive: true, badge: 'Coming Soon' },
       { id: 'translate', name: 'Translate PDF', desc: 'Translate document contents into 50+ languages.', icon: Languages, color: 'text-violet-500', bg: 'bg-violet-50', inactive: true, badge: 'Coming Soon' },
-      { id: 'to-markdown', name: 'PDF to Markdown', desc: 'Convert structured documents to clean Markdown.', icon: FileDown, color: 'text-blue-500', bg: 'bg-blue-50' },
+      { id: 'to-markdown', name: 'PDF to Markdown', desc: 'Convert structured documents to clean Markdown.', icon: FileDown, color: 'text-blue-500', bg: 'bg-blue-50', inactive: true, badge: 'Coming Soon' },
     ],
   },
 ];

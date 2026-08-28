@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { UploadCloud, X, Lock, AlertCircle, Loader2, ArrowRight, Plus, Trash2, FileText } from 'lucide-react';
+import { UploadCloud, X, Lock, Unlock, AlertCircle, Loader2, ArrowRight, Plus, Trash2, FileText } from 'lucide-react';
 import {
   checkPdfPassword,
   checkDocxPassword,
@@ -34,7 +34,7 @@ export default function ToolModal({ tool, onClose, onLaunchStudio }) {
     const lockedNames = [];
 
     try {
-      // Password security check
+      // 1. Password security check
       for (const file of newFilesArray) {
         let isLocked = false;
         if (file.name.toLowerCase().endsWith('.pdf') || file.type === 'application/pdf') {
@@ -52,7 +52,27 @@ export default function ToolModal({ tool, onClose, onLaunchStudio }) {
         }
       }
 
-      if (lockedNames.length > 0) {
+      // Check for Protect Tool: Block if already protected
+      if (tool.id === 'protect' && lockedNames.length > 0) {
+        setErrorMsg(`Cannot process: "${lockedNames[0]}" is already password-protected. Please choose an unprotected PDF.`);
+        setIsVerifying(false);
+        return;
+      }
+
+      // Check for Unlock Tool: Must be locked
+      if (tool.id === 'unlock') {
+        if (lockedNames.length === 0) {
+          setErrorMsg(`"${newFilesArray[0].name}" is already unlocked and does not require a password.`);
+          setIsVerifying(false);
+          return;
+        }
+        // Proceed to Unlock studio
+        onLaunchStudio(tool, { files: newFilesArray, isLocked: true });
+        return;
+      }
+
+      // Other tools: Block if password protected
+      if (tool.id !== 'unlock' && lockedNames.length > 0) {
         setLockedFiles(lockedNames);
         setErrorMsg(
           lockedNames.length === 1
@@ -63,7 +83,7 @@ export default function ToolModal({ tool, onClose, onLaunchStudio }) {
         return;
       }
 
-      // For merge tool: accumulate files and allow adding more
+      // For merge tool: accumulate files
       if (tool.id === 'merge') {
         const combined = [...modalFiles, ...newFilesArray];
         setModalFiles(combined);
@@ -130,11 +150,11 @@ export default function ToolModal({ tool, onClose, onLaunchStudio }) {
           </div>
         </div>
 
-        {/* Password Lock Alert */}
+        {/* Notice Box */}
         {errorMsg && (
           <div className="mb-5 p-4 bg-amber-50 border border-amber-200 rounded-2xl text-xs text-amber-950 leading-relaxed">
             <div className="flex items-start space-x-2.5">
-              <Lock className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+              <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
               <div>
                 <p className="font-bold">Notice</p>
                 <p className="mt-1">{errorMsg}</p>
@@ -172,7 +192,7 @@ export default function ToolModal({ tool, onClose, onLaunchStudio }) {
             />
             <button
               onClick={handleHtmlCodeSubmit}
-              className="w-full py-3.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl font-bold transition flex items-center justify-center space-x-2 shadow-md"
+              className="w-full py-3.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl font-bold transition flex items-center justify-center space-x-2 shadow-md cursor-pointer"
             >
               <span>Continue to Studio</span>
               <ArrowRight className="w-4 h-4" />
@@ -208,7 +228,7 @@ export default function ToolModal({ tool, onClose, onLaunchStudio }) {
                   <button
                     type="button"
                     onClick={() => removeModalFile(idx)}
-                    className="p-1 hover:bg-red-50 text-slate-400 hover:text-red-500 rounded transition shrink-0"
+                    className="p-1 hover:bg-red-50 text-slate-400 hover:text-red-500 rounded transition shrink-0 cursor-pointer"
                     title="Remove"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
@@ -262,7 +282,7 @@ export default function ToolModal({ tool, onClose, onLaunchStudio }) {
                     Drop {tool.id === 'merge' ? '2 or more PDF files' : 'document'} here or <span className="text-rose-500 font-bold">browse</span>
                   </p>
                   <p className="text-xs text-slate-400">
-                    {tool.id === 'merge' ? 'Select multiple PDFs to combine into a single document' : 'Files are checked for password security before editing'}
+                    {tool.id === 'unlock' ? 'Select the locked PDF to decrypt' : 'Files are checked for password security before editing'}
                   </p>
                 </>
               )}

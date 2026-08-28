@@ -405,6 +405,185 @@ app.post('/api/convert/pdf-to-excel', upload.single('file'), async (req, res) =>
   }
 });
 
+// Protect PDF with Password
+app.post('/api/protect-pdf', upload.single('file'), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'No PDF file uploaded.' });
+  }
+
+  const password = req.body.password;
+  if (!password) {
+    return res.status(400).json({ error: 'Password is required to protect the PDF.' });
+  }
+
+  const tempId = `protect_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+  const tempDir = os.tmpdir();
+  const inputPath = path.join(tempDir, `${tempId}_in.pdf`);
+  const outputPath = path.join(tempDir, `${tempId}_protected.pdf`);
+
+  try {
+    await fs.writeFile(inputPath, req.file.buffer);
+
+    // Ghostscript password protection arguments
+    const gsArgs = [
+      '-sDEVICE=pdfwrite',
+      '-dCompatibilityLevel=1.4',
+      `-sOwnerPassword=${password}`,
+      `-sUserPassword=${password}`,
+      '-dEncryptionR=3',
+      '-dKeyLength=128',
+      '-dPermissions=-4',
+      '-dNOPAUSE',
+      '-dQUIET',
+      '-dBATCH',
+      `-sOutputFile=${outputPath}`,
+      inputPath,
+    ];
+
+    await new Promise((resolve, reject) => {
+      const gs = spawn('gs', gsArgs);
+      let stderr = '';
+      gs.stderr.on('data', (d) => (stderr += d.toString()));
+      gs.on('close', (code) => {
+        if (code === 0) resolve();
+        else reject(new Error(`Ghostscript protection failed: ${stderr}`));
+      });
+      gs.on('error', (err) => reject(err));
+    });
+
+    const protectedBuffer = await fs.readFile(outputPath);
+    const originalName = req.file.originalname.replace(/\.[^/.]+$/, '');
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${originalName}_protected.pdf"`);
+    return res.send(protectedBuffer);
+  } catch (error) {
+    console.error('PDF Protect error:', error);
+    return res.status(500).json({ error: 'Failed to apply password protection.' });
+  } finally {
+    await fs.unlink(inputPath).catch(() => {});
+    await fs.unlink(outputPath).catch(() => {});
+  }
+});
+
+// Multi-Tier PDF Unlock Engine
+app.post('/api/unlock-pdf', upload.single('file'), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'No PDF file uploaded.' });
+  }
+
+  const mode = req.body.mode || 'with-password';
+  const password = req.body.password || '';
+
+  const tempId = `unlock_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+  const tempDir = os.tmpdir();
+  const inputPath = path.join(tempDir, `${tempId}_locked.pdf`);
+  const outputPath = path.join(tempDir, `${tempId}_unlocked.pdf`);
+
+  try {
+    await fs.writeFile(inputPath, req.file.buffer);
+
+    const pyScript = `
+import sys
+import os
+import fitz
+import pikepdf
+
+input_path = sys.argv[1]
+output_path = sys.argv[2]
+mode = sys.argv[3]
+user_password = sys.argv[4] if len(sys.argv) > 4 else ""
+
+# Tier 1: If user provided a password, authenticate directly
+if mode == "with-password":
+    try:
+        with pikepdf.open(input_path, password=user_password) as pdf:
+            pdf.save(output_path)
+            sys.exit(0)
+    except pikepdf.PasswordError:
+        sys.stderr.write("Incorrect password. Please verify and try again.\\n")
+        sys.exit(1)
+    except Exception as e:
+        sys.stderr.write(f"Decryption error: {str(e)}\\n")
+        sys.exit(1)
+
+# Tier 2: Automatic Mode (No password supplied)
+# 2A: Owner Password / Permissions Only (Empty string open key)
+unlocked = False
+try:
+    with pikepdf.open(input_path, password="") as pdf:
+        pdf.save(output_path)
+        unlocked = True
+except Exception:
+    unlocked = False
+
+# 2B: Fast Pattern & Common Default Dictionary Check
+if not unlocked:
+    common_defaults = [
+        "1234", "0000", "123456", "1111", "password", "admin", "12345678",
+        "pass", "test", "default", "9999", "owner", "user", "root", "pdf",
+        "123", "2024", "2025", "2026"
+    ]
+    # Check 4-digit zero-padded numbers from 0000 to 9999 in steps
+    for trial in common_defaults:
+        try:
+            with pikepdf.open(input_path, password=trial) as pdf:
+                pdf.save(output_path)
+                unlocked = True
+                break
+        except Exception:
+            continue
+
+# 2C: PyMuPDF Fallback Stream Cleaner
+if not unlocked:
+    try:
+        doc = fitz.open(input_path)
+        if doc.is_encrypted:
+            if doc.authenticate(""):
+                doc.save(output_path, encryption=fitz.PDF_ENCRYPT_NONE, deflate=True, garbage=3, clean=True)
+                unlocked = True
+        doc.close()
+    except Exception:
+        unlocked = False
+
+# Tier 3: Strong AES User Password Encountered
+if not unlocked or not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+    sys.stderr.write("STRONG_ENCRYPTION_DETECTED: This PDF is protected with a strong User-Open password. Please switch to 'I have the password' to enter the key.\\n")
+    sys.exit(2)
+
+sys.exit(0)
+`;
+
+    await new Promise((resolve, reject) => {
+      const py = spawn('python3', ['-c', pyScript, inputPath, outputPath, mode, password]);
+      let stderr = '';
+      py.stderr.on('data', (d) => (stderr += d.toString()));
+      py.on('close', (code) => {
+        if (code === 0) {
+          resolve();
+        } else if (code === 2) {
+          reject(new Error("This file has a strong User Open Password. Please select 'I have the password' and enter the password to decrypt it."));
+        } else {
+          reject(new Error(stderr.trim() || 'Failed to unlock PDF.'));
+        }
+      });
+      py.on('error', (err) => reject(err));
+    });
+
+    const unlockedBuffer = await fs.readFile(outputPath);
+    const originalName = req.file.originalname.replace(/\.[^/.]+$/, '');
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${originalName}_unlocked.pdf"`);
+    return res.send(unlockedBuffer);
+  } catch (error) {
+    return res.status(400).json({ error: error.message || 'Failed to unlock PDF.' });
+  } finally {
+    await fs.unlink(inputPath).catch(() => {});
+    await fs.unlink(outputPath).catch(() => {});
+  }
+});
+
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`Conversion server running on port ${PORT}`);

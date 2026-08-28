@@ -13,6 +13,7 @@ RUN apt-get update && apt-get install -y \
     libreoffice-calc \
     libreoffice-impress \
     ghostscript \
+    qpdf \
     poppler-utils \
     fonts-liberation \
     fonts-dejavu \
@@ -25,6 +26,7 @@ RUN pip3 install --no-cache-dir --break-system-packages \
     python-docx \
     pdfplumber \
     openpyxl
+    pikepdf
 
 WORKDIR /usr/src/app
 

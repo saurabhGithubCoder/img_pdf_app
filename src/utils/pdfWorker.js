@@ -7,29 +7,51 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
 // Configure pdfjs worker
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
 
+
 /**
- * Check if a file is password protected using pdfjs & pdf-lib
+ * Accurately check if a PDF is password-protected or encrypted.
+ * Returns true ONLY if the document cannot be read without a password.
  */
 export async function checkPdfPassword(file) {
-  const arrayBuffer = await file.arrayBuffer();
   try {
-    const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer.slice(0) });
-    await loadingTask.promise;
-  } catch (err) {
-    if (err.name === 'PasswordException' || err.message?.toLowerCase().includes('password')) {
-      return true;
+    const arrayBuffer = await file.arrayBuffer();
+    
+    // 1. Primary check via PDF.js (Catches PasswordException accurately)
+    try {
+      const loadingTask = pdfjsLib.getDocument({
+        data: new Uint8Array(arrayBuffer.slice(0)),
+        stopAtErrors: false
+      });
+      
+      // Attempt to load the document outline / first page
+      const doc = await loadingTask.promise;
+      await doc.getPage(1);
+      return false; // Document parsed and rendered cleanly without password
+    } catch (pdfErr) {
+      if (
+        pdfErr.name === 'PasswordException' ||
+        pdfErr.message?.toLowerCase().includes('password') ||
+        pdfErr.code === 1
+      ) {
+        return true; // Document is strictly encrypted with a password
+      }
     }
-  }
 
-  try {
-    await PDFDocument.load(arrayBuffer, { ignoreEncryption: false });
-  } catch (err) {
-    if (err.message?.toLowerCase().includes('password') || err.message?.toLowerCase().includes('encrypted')) {
-      return true;
+    // 2. Secondary check via pdf-lib
+    try {
+      await PDFDocument.load(arrayBuffer, { ignoreEncryption: false });
+      return false; // No encryption active
+    } catch (err) {
+      const msg = err.message?.toLowerCase() || '';
+      if (msg.includes('encrypt') || msg.includes('password') || msg.includes('protected')) {
+        return true;
+      }
     }
-  }
 
-  return false;
+    return false;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -1392,5 +1414,73 @@ export async function addWatermarkToPDF(file, options) {
     filename: `watermarked_${file.name}`,
     originalSize: file.size,
     compressedSize: pdfBytes.byteLength,
+  };
+}
+
+/**
+ * Protect PDF with password
+ */
+export async function protectPDF(file, password) {
+  const isLocked = await checkPdfPassword(file);
+  if (isLocked) {
+    const err = new Error(`"${file.name}" is already password-protected.`);
+    err.lockedFiles = [file.name];
+    throw err;
+  }
+
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('password', password);
+
+  const response = await fetch('/api/protect-pdf', {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.error || 'Failed to protect PDF.');
+  }
+
+  const blob = await response.blob();
+  const baseName = file.name.replace(/\.[^/.]+$/, '');
+  return {
+    blob,
+    filename: `${baseName}_protected.pdf`,
+    originalSize: file.size,
+    compressedSize: blob.size,
+  };
+}
+
+/**
+ * Unlock / Decrypt PDF with dual options (with password or automatic restriction removal)
+ */
+export async function unlockPDF(file, options = {}) {
+  const { mode = 'with-password', password = '' } = options;
+
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('mode', mode);
+  if (mode === 'with-password') {
+    formData.append('password', password);
+  }
+
+  const response = await fetch('/api/unlock-pdf', {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.error || 'Failed to unlock PDF document.');
+  }
+
+  const blob = await response.blob();
+  const baseName = file.name.replace(/\.[^/.]+$/, '');
+  return {
+    blob,
+    filename: `${baseName}_unlocked.pdf`,
+    originalSize: file.size,
+    compressedSize: blob.size,
   };
 }
