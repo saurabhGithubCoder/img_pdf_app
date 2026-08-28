@@ -21,12 +21,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install required Python packages for PDF, DOCX, and Excel processing
-RUN pip3 install --no-cache-dir --break-system-packages \
-    pymupdf \
-    python-docx \
-    pdfplumber \
-    openpyxl
-    pikepdf
+RUN pip3 install --no-cache-dir --break-system-packages pymupdf python-docx pdfplumber openpyxl pikepdf
 
 WORKDIR /usr/src/app
 
