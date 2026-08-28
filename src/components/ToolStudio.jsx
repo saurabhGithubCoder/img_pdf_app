@@ -88,7 +88,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
   const [showRepeatPassword, setShowRepeatPassword] = useState(false);
 
   // Unlock PDF Options State
-  const [unlockMode, setUnlockMode] = useState('without-password'); // 'without-password' | 'with-password'
+  const [unlockMode, setUnlockMode] = useState('without-password');
   const [unlockPassword, setUnlockPassword] = useState('');
   const [showUnlockPassword, setShowUnlockPassword] = useState(false);
 
@@ -198,7 +198,6 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
     }
   };
 
-  // Load first-page cover thumbnails for Merge PDF cards
   const loadMergePreviews = async (pdfFiles) => {
     setIsLoadingMergePreviews(true);
     try {
@@ -314,7 +313,6 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
     }
   };
 
-  // Merge Drag and Drop Handlers
   const handleMergeDragStart = (e, index) => {
     setDraggedMergeIndex(index);
     e.dataTransfer.effectAllowed = 'move';
@@ -807,7 +805,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
               </div>
             )}
 
-            {/* 2. Unlock PDF Studio with Active Testing Banner */}
+            {/* 2. Unlock PDF Studio with Testing Notice */}
             {tool.id === 'unlock' && (
               <div className="max-w-xl mx-auto bg-white border border-slate-200 rounded-3xl p-8 space-y-6 shadow-sm">
                 <div className="text-center space-y-2">
@@ -846,7 +844,6 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
 
                 {unlockMode === 'without-password' ? (
                   <div className="space-y-3">
-                    {/* Testing & Development Warning Banner */}
                     <div className="p-3.5 bg-amber-50/90 border border-amber-200 rounded-2xl flex items-start space-x-2.5 text-xs text-amber-950">
                       <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
                       <div>
@@ -1099,14 +1096,516 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
 
             {/* 4. Watermark Studio */}
             {tool.id === 'watermark' && (
-              /* Already rendered above */
-              null
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+                <div className="lg:col-span-8 bg-white border border-slate-200 rounded-3xl p-6 shadow-sm">
+                  <div className="flex items-center justify-between pb-4 border-b border-slate-100 text-xs font-semibold">
+                    <span className="text-slate-600">{files[0]?.name} ({totalPages} Pages)</span>
+                    <button
+                      type="button"
+                      onClick={() => changeFileInputRef.current?.click()}
+                      className="text-rose-600 hover:text-rose-700 font-bold flex items-center space-x-1 cursor-pointer"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      <span>Change File</span>
+                    </button>
+                  </div>
+
+                  {isRenderingPages ? (
+                    <div className="py-32 text-center text-slate-400 space-y-2">
+                      <Loader2 className="w-8 h-8 animate-spin mx-auto text-fuchsia-500" />
+                      <p className="text-sm">Rendering document preview...</p>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 pt-4 max-h-[560px] overflow-y-auto pr-1">
+                      {thumbnails.map((thumb, idx) => {
+                        const inRange =
+                          thumb.pageNumber >= watermarkOptions.fromPage &&
+                          thumb.pageNumber <= watermarkOptions.toPage;
+                        return (
+                          <div
+                            key={thumb.id}
+                            className="relative rounded-2xl border-2 border-slate-200 bg-slate-50 shadow-xs overflow-hidden p-3 flex flex-col items-center justify-center min-h-[200px]"
+                          >
+                            <img src={thumb.dataUrl} alt={`Page ${idx + 1}`} className="max-h-44 object-contain shadow-sm bg-white" />
+                            {inRange && !watermarkOptions.isMosaic && (
+                              <div
+                                className={`absolute w-4 h-4 bg-rose-500 rounded-full shadow-md border-2 border-white transition-all duration-150 ${getPositionDotClasses(
+                                  watermarkOptions.position
+                                )}`}
+                              />
+                            )}
+                            {inRange && watermarkOptions.isMosaic && (
+                              <div className="absolute inset-0 grid grid-cols-3 grid-rows-3 p-4 pointer-events-none">
+                                {[...Array(9)].map((_, dotIdx) => (
+                                  <div key={dotIdx} className="flex items-center justify-center">
+                                    <div className="w-2.5 h-2.5 bg-rose-500/80 rounded-full border border-white" />
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                            <span className="absolute bottom-2 right-2 text-[10px] font-bold px-2 py-0.5 rounded bg-slate-800/80 text-white">
+                              {idx + 1}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                <div className="lg:col-span-4 bg-white border border-slate-200 rounded-3xl p-6 space-y-4 shadow-sm text-xs">
+                  <h3 className="font-bold text-slate-900 text-sm border-b pb-3">Watermark options</h3>
+
+                  <div className="grid grid-cols-2 gap-2 p-1 bg-slate-100 rounded-2xl">
+                    <button
+                      type="button"
+                      onClick={() => setWatermarkOptions({ ...watermarkOptions, type: 'text' })}
+                      className={`py-2 rounded-xl font-bold flex items-center justify-center space-x-1.5 transition cursor-pointer ${
+                        watermarkOptions.type === 'text' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-500 hover:text-slate-800'
+                      }`}
+                    >
+                      <Type className="w-4 h-4 text-rose-500" />
+                      <span>Place text</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setWatermarkOptions({ ...watermarkOptions, type: 'image' })}
+                      className={`py-2 rounded-xl font-bold flex items-center justify-center space-x-1.5 transition cursor-pointer ${
+                        watermarkOptions.type === 'image' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-500 hover:text-slate-800'
+                      }`}
+                    >
+                      <ImageIcon className="w-4 h-4 text-rose-500" />
+                      <span>Place image</span>
+                    </button>
+                  </div>
+
+                  {watermarkOptions.type === 'text' ? (
+                    <div className="space-y-3">
+                      <div>
+                        <label className="font-semibold text-slate-700 block mb-1">Text:</label>
+                        <input
+                          type="text"
+                          value={watermarkOptions.text}
+                          onChange={(e) => setWatermarkOptions({ ...watermarkOptions, text: e.target.value })}
+                          className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-medium focus:outline-none focus:ring-2 focus:ring-rose-500/20"
+                        />
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="font-semibold text-slate-700 block text-[11px]">Text format:</label>
+                        <div className="flex items-center space-x-2">
+                          <select
+                            value={watermarkOptions.fontFamily}
+                            onChange={(e) => setWatermarkOptions({ ...watermarkOptions, fontFamily: e.target.value })}
+                            className="px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs flex-1"
+                          >
+                            <option value="Helvetica">Arial / Helvetica</option>
+                            <option value="Times">Times New Roman</option>
+                            <option value="Courier">Courier</option>
+                          </select>
+
+                          <div className="flex items-center space-x-0.5 border border-slate-200 rounded-lg p-0.5 bg-slate-50">
+                            <button
+                              type="button"
+                              onClick={() => setWatermarkOptions({ ...watermarkOptions, isBold: !watermarkOptions.isBold })}
+                              className={`px-2 py-1 font-bold rounded cursor-pointer ${watermarkOptions.isBold ? 'bg-rose-500 text-white' : 'text-slate-600'}`}
+                            >
+                              B
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setWatermarkOptions({ ...watermarkOptions, isItalic: !watermarkOptions.isItalic })}
+                              className={`px-2 py-1 italic rounded cursor-pointer ${watermarkOptions.isItalic ? 'bg-rose-500 text-white' : 'text-slate-600'}`}
+                            >
+                              I
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setWatermarkOptions({ ...watermarkOptions, isUnderline: !watermarkOptions.isUnderline })}
+                              className={`px-2 py-1 underline rounded cursor-pointer ${watermarkOptions.isUnderline ? 'bg-rose-500 text-white' : 'text-slate-600'}`}
+                            >
+                              U
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div>
+                      <label className="font-semibold text-slate-700 block mb-1">Image:</label>
+                      <label className="flex items-center justify-center space-x-2 p-3 bg-rose-50 hover:bg-rose-100 border-2 border-dashed border-rose-300 text-rose-700 font-bold rounded-2xl cursor-pointer transition">
+                        <ImageIcon className="w-4 h-4" />
+                        <span>{watermarkOptions.imageFile ? watermarkOptions.imageFile.name : 'ADD IMAGE'}</span>
+                        <input
+                          type="file"
+                          accept="image/png,image/jpeg"
+                          onChange={handleWatermarkImageUpload}
+                          className="hidden"
+                        />
+                      </label>
+                    </div>
+                  )}
+
+                  <div className="space-y-1.5 pt-2 border-t border-slate-100">
+                    <label className="font-semibold text-slate-700 block">Position:</label>
+                    <div className="flex items-center space-x-4">
+                      <div className="grid grid-cols-3 gap-1 w-20 h-20 border border-slate-300 rounded-xl p-1 bg-slate-50">
+                        {[
+                          'top-left', 'top-center', 'top-right',
+                          'middle-left', 'middle-center', 'middle-right',
+                          'bottom-left', 'bottom-center', 'bottom-right'
+                        ].map((pos) => (
+                          <button
+                            key={pos}
+                            type="button"
+                            disabled={watermarkOptions.isMosaic}
+                            onClick={() => setWatermarkOptions({ ...watermarkOptions, position: pos })}
+                            className={`rounded-md transition-colors flex items-center justify-center cursor-pointer ${
+                              watermarkOptions.position === pos && !watermarkOptions.isMosaic
+                                ? 'bg-rose-500 text-white shadow-xs'
+                                : 'bg-white hover:bg-slate-200 border border-slate-200'
+                            }`}
+                          >
+                            <span className={`w-1.5 h-1.5 rounded-full ${watermarkOptions.position === pos && !watermarkOptions.isMosaic ? 'bg-white' : 'bg-slate-400'}`} />
+                          </button>
+                        ))}
+                      </div>
+
+                      <label className="flex items-center space-x-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={watermarkOptions.isMosaic}
+                          onChange={(e) => setWatermarkOptions({ ...watermarkOptions, isMosaic: e.target.checked })}
+                          className="w-4 h-4 rounded accent-rose-500"
+                        />
+                        <span className="font-bold text-slate-700">Mosaic</span>
+                      </label>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3 pt-2 border-t border-slate-100">
+                    <div>
+                      <label className="font-semibold text-slate-700 block mb-1">Transparency:</label>
+                      <select
+                        value={watermarkOptions.opacity}
+                        onChange={(e) => setWatermarkOptions({ ...watermarkOptions, opacity: parseFloat(e.target.value) })}
+                        className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs"
+                      >
+                        <option value="1.0">No transparency</option>
+                        <option value="0.75">25% (Light)</option>
+                        <option value="0.5">50% (Recommended)</option>
+                        <option value="0.25">75% (Faint)</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="font-semibold text-slate-700 block mb-1">Rotation:</label>
+                      <select
+                        value={watermarkOptions.rotation}
+                        onChange={(e) => setWatermarkOptions({ ...watermarkOptions, rotation: parseInt(e.target.value, 10) })}
+                        className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs"
+                      >
+                        <option value="0">Do not rotate</option>
+                        <option value="45">45 Degrees</option>
+                        <option value="90">90 Degrees</option>
+                        <option value="180">180 Degrees</option>
+                        <option value="270">270 Degrees</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="pt-2 border-t border-slate-100">
+                    <label className="font-semibold text-slate-700 block mb-1">Pages:</label>
+                    <div className="flex items-center space-x-2">
+                      <span className="text-slate-500">from page</span>
+                      <input
+                        type="number"
+                        min="1"
+                        max={totalPages}
+                        value={watermarkOptions.fromPage}
+                        onChange={(e) => setWatermarkOptions({ ...watermarkOptions, fromPage: Math.max(1, parseInt(e.target.value, 10) || 1) })}
+                        className="w-14 px-2 py-1 text-center bg-slate-50 border border-slate-200 rounded-lg font-medium"
+                      />
+                      <span className="text-slate-500">to</span>
+                      <input
+                        type="number"
+                        min="1"
+                        max={totalPages}
+                        value={watermarkOptions.toPage}
+                        onChange={(e) => setWatermarkOptions({ ...watermarkOptions, toPage: Math.min(totalPages, parseInt(e.target.value, 10) || totalPages) })}
+                        className="w-14 px-2 py-1 text-center bg-slate-50 border border-slate-200 rounded-lg font-medium"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="pt-2 border-t border-slate-100 space-y-1.5">
+                    <label className="font-semibold text-slate-700 block">Layer:</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setWatermarkOptions({ ...watermarkOptions, layer: 'over' })}
+                        className={`p-2.5 rounded-xl border text-center transition cursor-pointer ${
+                          watermarkOptions.layer === 'over'
+                            ? 'border-rose-500 bg-rose-50 text-rose-700 font-bold'
+                            : 'border-slate-200 bg-slate-50 text-slate-600'
+                        }`}
+                      >
+                        Over the PDF content
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setWatermarkOptions({ ...watermarkOptions, layer: 'below' })}
+                        className={`p-2.5 rounded-xl border text-center transition cursor-pointer ${
+                          watermarkOptions.layer === 'below'
+                            ? 'border-rose-500 bg-rose-50 text-rose-700 font-bold'
+                            : 'border-slate-200 bg-slate-50 text-slate-600'
+                        }`}
+                      >
+                        Below the PDF content
+                      </button>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={executeAction}
+                    disabled={isProcessing || isRenderingPages}
+                    className="w-full py-3.5 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-2xl shadow-md transition flex items-center justify-center space-x-2 cursor-pointer"
+                  >
+                    {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <><span>Add watermark</span><ArrowRight className="w-4 h-4" /></>}
+                  </button>
+                </div>
+              </div>
             )}
 
             {/* 5. Page Numbers Studio */}
             {tool.id === 'page-numbers' && (
-              /* Already rendered above */
-              null
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+                <div className="lg:col-span-8 bg-white border border-slate-200 rounded-3xl p-6 shadow-sm">
+                  <div className="flex items-center justify-between pb-4 border-b border-slate-100 text-xs font-semibold">
+                    <span className="text-slate-600">{files[0]?.name} ({totalPages} Pages)</span>
+                    <button
+                      type="button"
+                      onClick={() => changeFileInputRef.current?.click()}
+                      className="text-rose-600 hover:text-rose-700 font-bold flex items-center space-x-1 cursor-pointer"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      <span>Change File</span>
+                    </button>
+                  </div>
+
+                  {isRenderingPages ? (
+                    <div className="py-32 text-center text-slate-400 space-y-2">
+                      <Loader2 className="w-8 h-8 animate-spin mx-auto text-purple-500" />
+                      <p className="text-sm">Rendering document preview...</p>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 pt-4 max-h-[560px] overflow-y-auto pr-1">
+                      {thumbnails.map((thumb, idx) => {
+                        const inRange =
+                          thumb.pageNumber >= pageNumberOptions.fromPage &&
+                          thumb.pageNumber <= pageNumberOptions.toPage;
+                        return (
+                          <div
+                            key={thumb.id}
+                            className="relative rounded-2xl border-2 border-slate-200 bg-slate-50 shadow-xs overflow-hidden p-3 flex flex-col items-center justify-center min-h-[200px]"
+                          >
+                            <img src={thumb.dataUrl} alt={`Page ${idx + 1}`} className="max-h-44 object-contain shadow-sm bg-white" />
+                            {inRange && (
+                              <div
+                                className={`absolute w-4 h-4 bg-rose-500 rounded-full shadow-md border-2 border-white transition-all duration-150 ${getPositionDotClasses(
+                                  pageNumberOptions.position
+                                )}`}
+                              />
+                            )}
+                            <span className="absolute bottom-2 right-2 text-[10px] font-bold px-2 py-0.5 rounded bg-slate-800/80 text-white">
+                              {idx + 1}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                <div className="lg:col-span-4 bg-white border border-slate-200 rounded-3xl p-6 space-y-5 shadow-sm text-xs">
+                  <h3 className="font-bold text-slate-900 text-sm border-b pb-3">Page Number options</h3>
+
+                  <div>
+                    <label className="font-semibold text-slate-700 block mb-2">Page mode</label>
+                    <div className="flex items-center space-x-4">
+                      <label className="flex items-center space-x-1.5 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="pageMode"
+                          checked={pageNumberOptions.pageMode === 'single'}
+                          onChange={() => setPageNumberOptions({ ...pageNumberOptions, pageMode: 'single' })}
+                          className="accent-rose-500"
+                        />
+                        <span className="text-slate-700 font-medium">Single page</span>
+                      </label>
+                      <label className="flex items-center space-x-1.5 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="pageMode"
+                          checked={pageNumberOptions.pageMode === 'facing'}
+                          onChange={() => setPageNumberOptions({ ...pageNumberOptions, pageMode: 'facing' })}
+                          className="accent-rose-500"
+                        />
+                        <span className="text-slate-700 font-medium">Facing pages</span>
+                      </label>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4 items-center">
+                    <div>
+                      <label className="font-semibold text-slate-700 block mb-1.5">Position:</label>
+                      <div className="grid grid-cols-3 gap-1 w-24 h-24 border border-slate-300 rounded-xl p-1 bg-slate-50">
+                        {[
+                          'top-left', 'top-center', 'top-right',
+                          'middle-left', 'middle-center', 'middle-right',
+                          'bottom-left', 'bottom-center', 'bottom-right'
+                        ].map((pos) => (
+                          <button
+                            key={pos}
+                            type="button"
+                            onClick={() => setPageNumberOptions({ ...pageNumberOptions, position: pos })}
+                            className={`rounded-md transition-colors flex items-center justify-center cursor-pointer ${
+                              pageNumberOptions.position === pos
+                                ? 'bg-rose-500 text-white shadow-xs'
+                                : 'bg-white hover:bg-slate-200 border border-slate-200'
+                            }`}
+                          >
+                            <span className={`w-2 h-2 rounded-full ${pageNumberOptions.position === pos ? 'bg-white' : 'bg-slate-400'}`} />
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="font-semibold text-slate-700 block mb-1.5">Margin:</label>
+                      <select
+                        value={pageNumberOptions.margin}
+                        onChange={(e) => setPageNumberOptions({ ...pageNumberOptions, margin: e.target.value })}
+                        className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs"
+                      >
+                        <option value="small">Small</option>
+                        <option value="recommended">Recommended</option>
+                        <option value="large">Large</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="space-y-3 pt-2 border-t border-slate-100">
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold text-slate-700">First number:</span>
+                      <input
+                        type="number"
+                        min="1"
+                        value={pageNumberOptions.firstNumber}
+                        onChange={(e) => setPageNumberOptions({ ...pageNumberOptions, firstNumber: Math.max(1, parseInt(e.target.value, 10) || 1) })}
+                        className="w-20 px-2 py-1 text-center bg-slate-50 border border-slate-200 rounded-lg font-bold"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="font-semibold text-slate-700 block mb-1">Which pages do you want to number?</label>
+                      <div className="flex items-center space-x-2">
+                        <span className="text-slate-500">from</span>
+                        <input
+                          type="number"
+                          min="1"
+                          max={totalPages}
+                          value={pageNumberOptions.fromPage}
+                          onChange={(e) => setPageNumberOptions({ ...pageNumberOptions, fromPage: Math.max(1, parseInt(e.target.value, 10) || 1) })}
+                          className="w-14 px-2 py-1 text-center bg-slate-50 border border-slate-200 rounded-lg font-medium"
+                        />
+                        <span className="text-slate-500">to</span>
+                        <input
+                          type="number"
+                          min="1"
+                          max={totalPages}
+                          value={pageNumberOptions.toPage}
+                          onChange={(e) => setPageNumberOptions({ ...pageNumberOptions, toPage: Math.min(totalPages, parseInt(e.target.value, 10) || totalPages) })}
+                          className="w-14 px-2 py-1 text-center bg-slate-50 border border-slate-200 rounded-lg font-medium"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2 pt-2 border-t border-slate-100">
+                    <label className="font-semibold text-slate-700 block">Text:</label>
+                    <select
+                      value={pageNumberOptions.textPreset}
+                      onChange={(e) => setPageNumberOptions({ ...pageNumberOptions, textPreset: e.target.value })}
+                      className="w-full px-2.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs"
+                    >
+                      <option value="number-only">Insert only page number (recommended)</option>
+                      <option value="page-n">Page &#123;n&#125;</option>
+                      <option value="page-n-of-p">Page &#123;n&#125; of &#123;p&#125;</option>
+                      <option value="custom">Custom</option>
+                    </select>
+
+                    {pageNumberOptions.textPreset === 'custom' && (
+                      <div className="space-y-1">
+                        <input
+                          type="text"
+                          value={pageNumberOptions.customText}
+                          onChange={(e) => setPageNumberOptions({ ...pageNumberOptions, customText: e.target.value })}
+                          className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg font-medium"
+                        />
+                        <p className="text-[10px] text-slate-400">Placeholders: &#123;n&#125;, Page &#123;n&#125;, Page &#123;n&#125; of &#123;p&#125;</p>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="space-y-2 pt-2 border-t border-slate-100">
+                    <label className="font-semibold text-slate-700 block text-[11px]">Text format:</label>
+                    <div className="flex items-center space-x-2">
+                      <select
+                        value={pageNumberOptions.fontFamily}
+                        onChange={(e) => setPageNumberOptions({ ...pageNumberOptions, fontFamily: e.target.value })}
+                        className="px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs"
+                      >
+                        <option value="Helvetica">Arial / Helvetica</option>
+                        <option value="Times">Times New Roman</option>
+                        <option value="Courier">Courier</option>
+                      </select>
+
+                      <div className="flex items-center space-x-1 border border-slate-200 rounded-lg p-0.5 bg-slate-50">
+                        <button
+                          type="button"
+                          onClick={() => setPageNumberOptions({ ...pageNumberOptions, isBold: !pageNumberOptions.isBold })}
+                          className={`px-2.5 py-1 font-bold rounded cursor-pointer ${pageNumberOptions.isBold ? 'bg-rose-500 text-white' : 'text-slate-600'}`}
+                        >
+                          B
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setPageNumberOptions({ ...pageNumberOptions, isItalic: !pageNumberOptions.isItalic })}
+                          className={`px-2.5 py-1 italic rounded cursor-pointer ${pageNumberOptions.isItalic ? 'bg-rose-500 text-white' : 'text-slate-600'}`}
+                        >
+                          I
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setPageNumberOptions({ ...pageNumberOptions, isUnderline: !pageNumberOptions.isUnderline })}
+                          className={`px-2.5 py-1 underline rounded cursor-pointer ${pageNumberOptions.isUnderline ? 'bg-rose-500 text-white' : 'text-slate-600'}`}
+                        >
+                          U
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={executeAction}
+                    disabled={isProcessing || isRenderingPages}
+                    className="w-full py-3.5 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-2xl shadow-md transition flex items-center justify-center space-x-2 cursor-pointer"
+                  >
+                    {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <><span>Add page numbers</span><ArrowRight className="w-4 h-4" /></>}
+                  </button>
+                </div>
+              </div>
             )}
 
             {/* 6. Rotate PDF Studio */}

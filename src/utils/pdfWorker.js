@@ -1432,7 +1432,8 @@ export async function protectPDF(file, password) {
   formData.append('file', file);
   formData.append('password', password);
 
-  const response = await fetch('/api/protect-pdf', {
+  //const response = await fetch('/api/protect-pdf', {
+  const response = await fetch(`${API_BASE_URL}/api/protect-pdf`, {
     method: 'POST',
     body: formData,
   });
@@ -1465,7 +1466,8 @@ export async function unlockPDF(file, options = {}) {
     formData.append('password', password);
   }
 
-  const response = await fetch('/api/unlock-pdf', {
+  //const response = await fetch('/api/unlock-pdf', {
+  const response = await fetch(`${API_BASE_URL}/api/unlock-pdf`, {
     method: 'POST',
     body: formData,
   });
