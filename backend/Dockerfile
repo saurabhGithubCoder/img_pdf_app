@@ -1,10 +1,15 @@
 FROM node:20-slim
 
+# Enable contrib/non-free repos to access TrueType packages
+RUN sed -i 's/main$/main contrib non-free non-free-firmware/g' /etc/apt/sources.list.d/* 2>/dev/null || true
+
 # Install system utilities, Python 3, LibreOffice suite, Ghostscript, and standard font sets
 RUN apt-get update && apt-get install -y \
     bzip2 \
     tar \
     curl \
+    wget \
+    cabextract \
     build-essential \
     python3 \
     python3-pip \
@@ -16,6 +21,14 @@ RUN apt-get update && apt-get install -y \
     qpdf \
     poppler-utils \
     fonts-liberation \
+    fonts-liberation2 \
+    fonts-dejavu \
+    fonts-croscore \
+    fonts-crosextra-carlito \
+    fonts-crosextra-caladea \
+    fonts-noto \
+    fonts-freefont-ttf \
+    ttf-mscorefonts-installer \
     fonts-dejavu \
     --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*

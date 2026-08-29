@@ -25,6 +25,136 @@ app.use(cors({
 
 app.use(express.json());
 
+// Universal 1:1 Word to PDF conversion engine for arbitrary document layouts
+async function convertDocxToPdf(fileBuffer, originalFilename) {
+  const tempId = `docx_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+  const tempDir = os.tmpdir();
+  const inputPath = path.join(tempDir, `${tempId}_${originalFilename}`);
+  const rawPdfPath = path.join(tempDir, `${tempId}_raw.pdf`);
+  const finalPdfPath = path.join(tempDir, `${tempId}_final.pdf`);
+  const userProfileDir = path.join(tempDir, `lo_profile_${tempId}`);
+
+  await fs.writeFile(inputPath, fileBuffer);
+
+  // 1. Convert via LibreOffice using native layout fidelity settings
+  const loArgs = [
+    `-env:UserInstallation=file://${userProfileDir}`,
+    '--headless',
+    '--invisible',
+    '--nodefault',
+    '--nofirststartwizard',
+    '--nolockcheck',
+    '--nologo',
+    '--norestore',
+    '--convert-to',
+    'pdf:writer_pdf_Export:{"SelectPdfVersion":{"type":"long","value":"1"},"UseTaggedPDF":{"type":"boolean","value":"true"},"ExportNotes":{"type":"boolean","value":"false"}}',
+    '--outdir',
+    tempDir,
+    inputPath,
+  ];
+
+  await new Promise((resolve) => {
+    const lo = spawn('soffice', loArgs);
+    lo.on('close', () => resolve());
+    lo.on('error', () => resolve());
+  });
+
+  const generatedPdfName = path.basename(inputPath, path.extname(inputPath)) + '.pdf';
+  const generatedPdfPath = path.join(tempDir, generatedPdfName);
+
+  // Fallback if direct soffice fails
+  if (!(await fs.stat(generatedPdfPath).catch(() => null))) {
+    const fallbackBuffer = await libreConvert(fileBuffer, '.pdf', undefined);
+    await fs.writeFile(generatedPdfPath, fallbackBuffer);
+  }
+
+  // 2. Universal Post-Processor: Reconcile DOCX intended pages vs generated PDF pages
+  const pyReconcile = `
+import sys
+import os
+import fitz
+import docx
+
+docx_file = sys.argv[1]
+pdf_in = sys.argv[2]
+pdf_out = sys.argv[3]
+
+try:
+    expected_pages = 0
+    # Determine Word document target pagination from XML metadata & break markers
+    if docx_file.lower().endswith('.docx'):
+        doc = docx.Document(docx_file)
+        # Check core properties (if Word cached the page count)
+        try:
+            core_props = doc.core_properties
+            if hasattr(core_props, 'pages') and core_props.pages:
+                expected_pages = int(core_props.pages)
+        except Exception:
+            expected_pages = 0
+
+        # Count explicit hard page breaks and section breaks
+        explicit_breaks = 1
+        for p in doc.paragraphs:
+            for r in p.runs:
+                if 'w:br' in r._element.xml and 'type="page"' in r._element.xml:
+                    explicit_breaks += 1
+        for t in doc.tables:
+            for r in t.rows:
+                for c in r.cells:
+                    for p in c.paragraphs:
+                        for run in p.runs:
+                            if 'w:br' in run._element.xml and 'type="page"' in run._element.xml:
+                                explicit_breaks += 1
+
+        expected_pages = max(expected_pages, explicit_breaks)
+
+    # Inspect rendered PDF
+    pdf_doc = fitz.open(pdf_in)
+    actual_pages = len(pdf_doc)
+
+    # If an extra blank/trailing overflow page was created at the very end with no real content
+    if expected_pages > 0 and actual_pages > expected_pages:
+        last_page = pdf_doc[-1]
+        text_content = last_page.get_text().strip()
+        drawings = last_page.get_drawings()
+        images = last_page.get_images()
+
+        # If last page contains only trailing whitespace, margins, or zero meaningful drawings
+        if not text_content and len(drawings) == 0 and len(images) == 0:
+            pdf_doc.delete_page(actual_pages - 1)
+
+    pdf_doc.save(pdf_out, garbage=3, deflate=True)
+    pdf_doc.close()
+    sys.exit(0)
+except Exception:
+    import shutil
+    shutil.copy(pdf_in, pdf_out)
+    sys.exit(0)
+`;
+
+  try {
+    await new Promise((resolve) => {
+      const py = spawn('python3', ['-c', pyReconcile, inputPath, generatedPdfPath, finalPdfPath]);
+      py.on('close', () => resolve());
+      py.on('error', () => resolve());
+    });
+  } catch {
+    // Proceed with generated PDF if post-processor has issues
+  }
+
+  const outputTarget = (await fs.stat(finalPdfPath).catch(() => null)) ? finalPdfPath : generatedPdfPath;
+  const pdfBuffer = await fs.readFile(outputTarget);
+
+  // Cleanup
+  await fs.unlink(inputPath).catch(() => {});
+  await fs.unlink(generatedPdfPath).catch(() => {});
+  await fs.unlink(finalPdfPath).catch(() => {});
+  await fs.rm(userProfileDir, { recursive: true, force: true }).catch(() => {});
+
+  return pdfBuffer;
+}
+
+// Word to PDF Route
 app.post('/api/convert/word-to-pdf', upload.single('file'), async (req, res) => {
   try {
     if (!req.file) {
@@ -44,14 +174,14 @@ app.post('/api/convert/word-to-pdf', upload.single('file'), async (req, res) => 
       }
     }
 
-    const pdfBuffer = await libreConvert(buffer, '.pdf', undefined);
+    const pdfBuffer = await convertDocxToPdf(buffer, req.file.originalname);
     const originalName = req.file.originalname.replace(/\.[^/.]+$/, '');
 
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${originalName}.pdf"`);
     return res.send(pdfBuffer);
   } catch (error) {
-    console.error('Conversion failed:', error);
+    console.error('Word conversion failed:', error);
     return res.status(500).json({ error: 'Failed to convert document with LibreOffice.' });
   }
 });

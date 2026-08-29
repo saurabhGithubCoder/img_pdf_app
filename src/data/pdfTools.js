@@ -56,7 +56,7 @@ export const PDF_CATEGORIES = [
     title: 'Convert to PDF',
     tools: [
       { id: 'jpg-to-pdf', name: 'JPG to PDF', desc: 'Convert JPG, PNG, and WebP images to PDF.', icon: FileImage, color: 'text-yellow-500', bg: 'bg-yellow-50' },
-      { id: 'word-to-pdf', name: 'WORD to PDF', desc: 'Convert DOCX files directly to PDF.', icon: FileText, color: 'text-blue-500', bg: 'bg-blue-50', badge: '99% Accurate' },
+      { id: 'word-to-pdf', name: 'WORD to PDF', desc: 'Convert DOCX files directly to PDF.', icon: FileText, color: 'text-blue-500', bg: 'bg-blue-50', badge: '50% Accurate' },
       { id: 'powerpoint-to-pdf', name: 'POWERPOINT to PDF', desc: 'Turn PPTX presentations into PDF slides.', icon: Presentation, color: 'text-orange-500', bg: 'bg-orange-50' },
       { id: 'excel-to-pdf', name: 'EXCEL to PDF', desc: 'Convert spreadsheets to formatted PDF tables.', icon: Sheet, color: 'text-emerald-600', bg: 'bg-emerald-50' },
       { id: 'html-to-pdf', name: 'HTML to PDF', desc: 'Render web pages and HTML strings to PDF.', icon: FileCode, color: 'text-amber-500', bg: 'bg-amber-50', badge: 'Not Accurate' },
