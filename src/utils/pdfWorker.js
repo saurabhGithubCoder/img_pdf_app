@@ -841,7 +841,7 @@ export async function convertHtmlToPDF(input) {
     const formData = new FormData();
     formData.append('file', input);
 
-    response = await fetch('/api/convert/html-to-pdf', {
+    response = await fetch(`${API_BASE_URL}/api/convert/html-to-pdf`, {
     //response = await fetch(`${API_BASE_URL}/api/convert/html-to-pdf`, {
       method: 'POST',
       body: formData,
