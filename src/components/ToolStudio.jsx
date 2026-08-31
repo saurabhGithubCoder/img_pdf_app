@@ -35,7 +35,14 @@ import {
   EyeOff,
   KeyRound,
   Wand2,
-  AlertTriangle
+  AlertTriangle,
+  Crop as CropIcon,
+  ChevronUp,
+  ChevronDown,
+  ZoomIn,
+  ZoomOut,
+  Maximize,
+  Settings
 } from 'lucide-react';
 import {
   mergePDFs,
@@ -45,6 +52,8 @@ import {
   pdfToJpg,
   pdfToMarkdown,
   renderPdfThumbnails,
+  renderSinglePdfPage,
+  cropPDF,
   removePagesFromPDF,
   extractPagesFromPDF,
   reorganizePDF,
@@ -105,7 +114,8 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
     tool.id === 'rotate' ||
     tool.id === 'page-numbers' ||
     tool.id === 'watermark' ||
-    tool.id === 'protect';
+    tool.id === 'protect' ||
+    tool.id === 'crop';
 
   const [thumbnails, setThumbnails] = useState([]);
   const [totalPages, setTotalPages] = useState(0);
@@ -162,13 +172,40 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
     color: '#E11D48'
   });
 
+  // Crop PDF Tool State
+  const [cropPageMode, setCropPageMode] = useState('all'); // 'all' | 'current'
+  const [cropCurrentPage, setCropCurrentPage] = useState(1);
+  const [cropZoom, setCropZoom] = useState(68);
+  const [cropPageDataUrl, setCropPageDataUrl] = useState('');
+  const [cropBox, setCropBox] = useState({ x: 5, y: 5, width: 90, height: 90 });
+  const cropCanvasContainerRef = useRef(null);
+  const cropDragState = useRef({ isDragging: false, isResizing: false, handle: null, startX: 0, startY: 0, initialBox: null });
+
   useEffect(() => {
     if (isPageLevelTool && files.length > 0) {
-      loadDocumentThumbnails(files[0]);
+      if (tool.id === 'crop') {
+        loadCropPagePreview(files[0], cropCurrentPage);
+      } else {
+        loadDocumentThumbnails(files[0]);
+      }
     } else if (tool.id === 'merge' && files.length > 0) {
       loadMergePreviews(files);
     }
-  }, [files, tool.id]);
+  }, [files, tool.id, cropCurrentPage]);
+
+  const loadCropPagePreview = async (file, pageNum) => {
+    setErrorMsg('');
+    setIsRenderingPages(true);
+    try {
+      const data = await renderSinglePdfPage(file, pageNum, 1.6);
+      setCropPageDataUrl(data.dataUrl);
+      setTotalPages(data.totalPages);
+    } catch (err) {
+      setErrorMsg('Failed to render PDF page. The document may be corrupted.');
+    } finally {
+      setIsRenderingPages(false);
+    }
+  };
 
   const loadDocumentThumbnails = async (file) => {
     setErrorMsg('');
@@ -481,6 +518,65 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
+  // Crop Drag & Resize Handlers
+  const handleCropMouseDown = (e, handle = null) => {
+    e.stopPropagation();
+    e.preventDefault();
+    cropDragState.current = {
+      isDragging: !handle,
+      isResizing: Boolean(handle),
+      handle,
+      startX: e.clientX,
+      startY: e.clientY,
+      initialBox: { ...cropBox }
+    };
+
+    window.addEventListener('mousemove', handleCropMouseMove);
+    window.addEventListener('mouseup', handleCropMouseUp);
+  };
+
+  const handleCropMouseMove = (e) => {
+    const { isDragging, isResizing, handle, startX, startY, initialBox } = cropDragState.current;
+    if (!isDragging && !isResizing) return;
+    if (!cropCanvasContainerRef.current) return;
+
+    const rect = cropCanvasContainerRef.current.getBoundingClientRect();
+    const deltaXPercent = ((e.clientX - startX) / rect.width) * 100;
+    const deltaYPercent = ((e.clientY - startY) / rect.height) * 100;
+
+    if (isDragging) {
+      const newX = Math.max(0, Math.min(100 - initialBox.width, initialBox.x + deltaXPercent));
+      const newY = Math.max(0, Math.min(100 - initialBox.height, initialBox.y + deltaYPercent));
+      setCropBox((prev) => ({ ...prev, x: newX, y: newY }));
+    } else if (isResizing) {
+      let { x, y, width, height } = initialBox;
+
+      if (handle.includes('e')) width = Math.max(5, Math.min(100 - x, width + deltaXPercent));
+      if (handle.includes('s')) height = Math.max(5, Math.min(100 - y, height + deltaYPercent));
+      if (handle.includes('w')) {
+        const potentialWidth = width - deltaXPercent;
+        if (potentialWidth >= 5 && x + deltaXPercent >= 0) {
+          x += deltaXPercent;
+          width = potentialWidth;
+        }
+      }
+      if (handle.includes('n')) {
+        const potentialHeight = height - deltaYPercent;
+        if (potentialHeight >= 5 && y + deltaYPercent >= 0) {
+          y += deltaYPercent;
+          height = potentialHeight;
+        }
+      }
+      setCropBox({ x, y, width, height });
+    }
+  };
+
+  const handleCropMouseUp = () => {
+    cropDragState.current = { isDragging: false, isResizing: false, handle: null, startX: 0, startY: 0, initialBox: null };
+    window.removeEventListener('mousemove', handleCropMouseMove);
+    window.removeEventListener('mouseup', handleCropMouseUp);
+  };
+
   const executeAction = async () => {
     setErrorMsg('');
 
@@ -515,6 +611,13 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
     try {
       let output;
       switch (tool.id) {
+        case 'crop':
+          output = await cropPDF(files[0], {
+            pagesMode: cropPageMode,
+            currentPage: cropCurrentPage,
+            box: cropBox
+          });
+          break;
         case 'protect':
           output = await protectPDF(files[0], protectPassword);
           break;
@@ -716,7 +819,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
         </div>
       </header>
 
-      <main className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 pt-8">
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6">
         {errorMsg && (
           <div className="mb-6 p-4 bg-rose-50 border border-rose-200 rounded-2xl text-xs text-rose-800 flex items-start space-x-2.5">
             <Info className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
@@ -726,6 +829,196 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
 
         {!result ? (
           <div className="space-y-6">
+            {/* 0. Crop PDF Studio (Interactive Visual Workspace) */}
+            {tool.id === 'crop' && (
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+                {/* Left Preview Canvas */}
+                <div className="lg:col-span-8 bg-slate-200/60 rounded-3xl p-6 border border-slate-200 flex flex-col items-center min-h-[580px] relative overflow-hidden">
+                  {isRenderingPages ? (
+                    <div className="py-44 flex flex-col items-center justify-center space-y-3 text-slate-400">
+                      <Loader2 className="w-10 h-10 animate-spin text-rose-500" />
+                      <p className="text-xs font-semibold">Rendering page for cropping...</p>
+                    </div>
+                  ) : cropPageDataUrl ? (
+                    <div className="w-full flex flex-col items-center justify-center">
+                      <div
+                        ref={cropCanvasContainerRef}
+                        style={{ width: `${cropZoom}%` }}
+                        className="relative bg-white shadow-xl rounded-md transition-all duration-150 select-none overflow-hidden"
+                      >
+                        {/* Page Preview Image */}
+                        <img
+                          src={cropPageDataUrl}
+                          alt={`Page ${cropCurrentPage}`}
+                          className="w-full h-auto pointer-events-none block"
+                          draggable={false}
+                        />
+
+                        {/* Dimmer Overlays (Outside Crop Box) */}
+                        <div className="absolute top-0 left-0 right-0 bg-slate-900/40 pointer-events-none" style={{ height: `${cropBox.y}%` }} />
+                        <div className="absolute bottom-0 left-0 right-0 bg-slate-900/40 pointer-events-none" style={{ height: `${100 - (cropBox.y + cropBox.height)}%` }} />
+                        <div className="absolute left-0 bg-slate-900/40 pointer-events-none" style={{ top: `${cropBox.y}%`, height: `${cropBox.height}%`, width: `${cropBox.x}%` }} />
+                        <div className="absolute right-0 bg-slate-900/40 pointer-events-none" style={{ top: `${cropBox.y}%`, height: `${cropBox.height}%`, width: `${100 - (cropBox.x + cropBox.width)}%` }} />
+
+                        {/* Draggable & Resizable Active Crop Box */}
+                        <div
+                          onMouseDown={(e) => handleCropMouseDown(e)}
+                          style={{
+                            left: `${cropBox.x}%`,
+                            top: `${cropBox.y}%`,
+                            width: `${cropBox.width}%`,
+                            height: `${cropBox.height}%`
+                          }}
+                          className="absolute border-2 border-dashed border-rose-500 cursor-move z-20 group shadow-[0_0_0_9999px_rgba(0,0,0,0.3)]"
+                        >
+                          {/* Corner & Edge Resize Handles */}
+                          {['nw', 'ne', 'sw', 'se', 'n', 's', 'e', 'w'].map((handle) => {
+                            const posClasses = {
+                              nw: '-top-1.5 -left-1.5 cursor-nwse-resize',
+                              ne: '-top-1.5 -right-1.5 cursor-nesw-resize',
+                              sw: '-bottom-1.5 -left-1.5 cursor-nesw-resize',
+                              se: '-bottom-1.5 -right-1.5 cursor-nwse-resize',
+                              n: '-top-1.5 left-1/2 -translate-x-1/2 cursor-ns-resize',
+                              s: '-bottom-1.5 left-1/2 -translate-x-1/2 cursor-ns-resize',
+                              e: 'top-1/2 -right-1.5 -translate-y-1/2 cursor-ew-resize',
+                              w: 'top-1/2 -left-1.5 -translate-y-1/2 cursor-ew-resize',
+                            };
+                            return (
+                              <div
+                                key={handle}
+                                onMouseDown={(e) => handleCropMouseDown(e, handle)}
+                                className={`absolute w-3 h-3 bg-white border-2 border-rose-500 rounded-sm shadow-sm ${posClasses[handle]}`}
+                              />
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Bottom Floating Viewer Control Bar */}
+                      <div className="mt-8 bg-slate-800/90 backdrop-blur-md text-white px-4 py-2 rounded-2xl flex items-center space-x-3 text-xs shadow-lg">
+                        <button
+                          type="button"
+                          onClick={() => setCropCurrentPage((p) => Math.max(1, p - 1))}
+                          disabled={cropCurrentPage <= 1}
+                          className="p-1 hover:bg-slate-700 rounded-lg disabled:opacity-30 cursor-pointer"
+                        >
+                          <ChevronUp className="w-4 h-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setCropCurrentPage((p) => Math.min(totalPages, p + 1))}
+                          disabled={cropCurrentPage >= totalPages}
+                          className="p-1 hover:bg-slate-700 rounded-lg disabled:opacity-30 cursor-pointer"
+                        >
+                          <ChevronDown className="w-4 h-4" />
+                        </button>
+                        <div className="h-4 w-px bg-slate-600" />
+                        <span className="font-bold px-1.5 py-0.5 bg-slate-700 rounded text-slate-200">
+                          {cropCurrentPage}
+                        </span>
+                        <span className="text-slate-400">/ {totalPages}</span>
+                        <div className="h-4 w-px bg-slate-600" />
+                        <button
+                          type="button"
+                          onClick={() => setCropZoom((z) => Math.max(40, z - 10))}
+                          className="p-1 hover:bg-slate-700 rounded-lg cursor-pointer"
+                        >
+                          <ZoomOut className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setCropZoom((z) => Math.min(100, z + 10))}
+                          className="p-1 hover:bg-slate-700 rounded-lg cursor-pointer"
+                        >
+                          <ZoomIn className="w-3.5 h-3.5" />
+                        </button>
+                        <span className="font-mono text-slate-300 font-semibold">{cropZoom}%</span>
+                        <div className="h-4 w-px bg-slate-600" />
+                        <button
+                          type="button"
+                          onClick={() => setCropZoom(68)}
+                          className="p-1 hover:bg-slate-700 rounded-lg text-slate-300 hover:text-white cursor-pointer"
+                        >
+                          <Maximize className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+
+                {/* Right Options Panel */}
+                <div className="lg:col-span-4 bg-white border border-slate-200 rounded-3xl p-6 sm:p-8 space-y-6 shadow-sm">
+                  <div className="flex items-center justify-between border-b pb-4">
+                    <h3 className="text-2xl font-black text-slate-900 tracking-tight">Crop PDF</h3>
+                    <button
+                      type="button"
+                      onClick={() => setCropBox({ x: 5, y: 5, width: 90, height: 90 })}
+                      className="text-xs font-bold text-red-500 hover:text-red-700 underline cursor-pointer"
+                    >
+                      Reset all
+                    </button>
+                  </div>
+
+                  {/* Info Notice Box */}
+                  <div className="p-4 bg-sky-50 border border-sky-200/80 rounded-2xl flex items-start space-x-3 text-xs text-sky-900 leading-relaxed">
+                    <Info className="w-4 h-4 text-sky-600 shrink-0 mt-0.5" />
+                    <p className="font-medium">
+                      Click and drag to select the area you want to keep. Resize if needed.
+                    </p>
+                  </div>
+
+                  {/* Pages Option Section */}
+                  <div className="space-y-3 pt-2">
+                    <label className="text-sm font-bold text-slate-900 block">Pages:</label>
+                    <div className="flex items-center space-x-6">
+                      <label className="flex items-center space-x-2.5 cursor-pointer text-xs font-semibold text-slate-700">
+                        <input
+                          type="radio"
+                          name="cropPageSelection"
+                          checked={cropPageMode === 'all'}
+                          onChange={() => setCropPageMode('all')}
+                          className="w-4 h-4 accent-emerald-600 cursor-pointer"
+                        />
+                        <span>All pages</span>
+                      </label>
+
+                      <label className="flex items-center space-x-2.5 cursor-pointer text-xs font-semibold text-slate-700">
+                        <input
+                          type="radio"
+                          name="cropPageSelection"
+                          checked={cropPageMode === 'current'}
+                          onChange={() => setCropPageMode('current')}
+                          className="w-4 h-4 accent-emerald-600 cursor-pointer"
+                        />
+                        <span>Current page</span>
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* Big Action Button */}
+                  <button
+                    onClick={executeAction}
+                    disabled={isProcessing}
+                    className="w-full py-4 bg-rose-400 hover:bg-rose-500 disabled:opacity-50 text-white font-bold rounded-2xl shadow-md transition flex items-center justify-center space-x-2 cursor-pointer mt-8"
+                  >
+                    {isProcessing ? (
+                      <div className="flex items-center space-x-2">
+                        <Loader2 className="w-5 h-5 animate-spin text-white" />
+                        <span>Cropping PDF document...</span>
+                      </div>
+                    ) : (
+                      <>
+                        <span className="text-lg">Crop PDF</span>
+                        <div className="w-6 h-6 rounded-full bg-white/20 flex items-center justify-center">
+                          <ArrowRight className="w-4 h-4 text-white" />
+                        </div>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* 1. Protect PDF Studio */}
             {tool.id === 'protect' && (
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
@@ -805,7 +1098,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
               </div>
             )}
 
-            {/* 2. Unlock PDF Studio with Testing Notice */}
+            {/* 2. Unlock PDF Studio */}
             {tool.id === 'unlock' && (
               <div className="max-w-xl mx-auto bg-white border border-slate-200 rounded-3xl p-8 space-y-6 shadow-sm">
                 <div className="text-center space-y-2">
@@ -1859,7 +2152,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
               </div>
             )}
 
-            {/* 11. Visual Merge PDF Studio (Visual Cards + Drag to Reorder) */}
+            {/* 11. Visual Merge PDF Studio */}
             {tool.id === 'merge' && (
               <div className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-8 shadow-sm space-y-6">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-100 text-xs">

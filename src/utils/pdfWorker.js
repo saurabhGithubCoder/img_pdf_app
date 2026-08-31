@@ -7,7 +7,6 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
 // Configure pdfjs worker
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
 
-
 /**
  * Accurately check if a PDF is password-protected or encrypted.
  * Returns true ONLY if the document cannot be read without a password.
@@ -132,6 +131,39 @@ export async function renderPdfThumbnails(file) {
   }
 
   return { totalPages: numPages, thumbnails };
+}
+
+/**
+ * Render a high-resolution single page of a PDF for the Crop Workspace
+ */
+export async function renderSinglePdfPage(file, pageNum = 1, scale = 1.6) {
+  const isLocked = await checkPdfPassword(file);
+  if (isLocked) {
+    const err = new Error(`"${file.name}" is password-protected and cannot be processed.`);
+    err.lockedFiles = [file.name];
+    throw err;
+  }
+
+  const arrayBuffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  const totalPages = pdf.numPages;
+  const targetPageNum = Math.max(1, Math.min(pageNum, totalPages));
+
+  const page = await pdf.getPage(targetPageNum);
+  const viewport = page.getViewport({ scale });
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  canvas.height = viewport.height;
+  canvas.width = viewport.width;
+
+  await page.render({ canvasContext: ctx, viewport }).promise;
+
+  return {
+    dataUrl: canvas.toDataURL('image/jpeg', 0.95),
+    width: viewport.width,
+    height: viewport.height,
+    totalPages
+  };
 }
 
 /**
@@ -336,25 +368,6 @@ export async function splitPDF(file) {
     filename: `${file.name.replace(/\.[^/.]+$/, '')}_pages.zip`
   };
 }
-
-/**
- * Rotate all pages in a PDF by 90 degrees clockwise.
- */
-/*export async function rotatePDF(file, angle = 90) {
-  const pdfDoc = await loadPdfSafely(file);
-  const pages = pdfDoc.getPages();
-
-  pages.forEach((page) => {
-    const currentRotation = page.getRotation().angle;
-    page.setRotation(degrees((currentRotation + angle) % 360));
-  });
-
-  const bytes = await pdfDoc.save();
-  return {
-    blob: new Blob([bytes], { type: 'application/pdf' }),
-    filename: `rotated_${file.name}`
-  };
-}*/
 
 /**
  * Convert an ordered list of Image files into PDF with layout options.
@@ -1412,6 +1425,55 @@ export async function addWatermarkToPDF(file, options) {
   return {
     blob: new Blob([pdfBytes], { type: 'application/pdf' }),
     filename: `watermarked_${file.name}`,
+    originalSize: file.size,
+    compressedSize: pdfBytes.byteLength,
+  };
+}
+
+/**
+ * Crop PDF pages using visual rectangle bounds (x, y, width, height in % 0..100)
+ */
+export async function cropPDF(file, cropOptions) {
+  const isLocked = await checkPdfPassword(file);
+  if (isLocked) {
+    const err = new Error(`Cannot process: "${file.name}" is password-protected or encrypted.`);
+    err.lockedFiles = [file.name];
+    throw err;
+  }
+
+  const {
+    pagesMode = 'all', // 'all' | 'current'
+    currentPage = 1,
+    box = { x: 5, y: 5, width: 90, height: 90 }
+  } = cropOptions;
+
+  const arrayBuffer = await file.arrayBuffer();
+  const pdfDoc = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
+  const totalPages = pdfDoc.getPageCount();
+
+  const pagesToCrop = pagesMode === 'all' 
+    ? pdfDoc.getPages()
+    : [pdfDoc.getPage(Math.max(0, Math.min(currentPage - 1, totalPages - 1)))];
+
+  pagesToCrop.forEach((page) => {
+    const { width: pageWidth, height: pageHeight } = page.getSize();
+
+    // Map percentage coordinates (0-100) to PDF Point Dimensions (PDF origin is bottom-left)
+    const cropX = (box.x / 100) * pageWidth;
+    const cropWidth = Math.max(10, (box.width / 100) * pageWidth);
+    const cropHeight = Math.max(10, (box.height / 100) * pageHeight);
+    
+    // Invert Y coordinate since PDF (0,0) is bottom-left whereas DOM (0,0) is top-left
+    const cropY = pageHeight - ((box.y / 100) * pageHeight) - cropHeight;
+
+    page.setCropBox(cropX, Math.max(0, cropY), cropWidth, cropHeight);
+    page.setMediaBox(cropX, Math.max(0, cropY), cropWidth, cropHeight);
+  });
+
+  const pdfBytes = await pdfDoc.save({ useObjectStreams: true });
+  return {
+    blob: new Blob([pdfBytes], { type: 'application/pdf' }),
+    filename: `cropped_${file.name}`,
     originalSize: file.size,
     compressedSize: pdfBytes.byteLength,
   };

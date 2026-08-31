@@ -714,6 +714,107 @@ sys.exit(0)
   }
 });
 
+/**
+ * Executes a PDF crop operation using Ghostscript.
+ * It maps normalized client coordinates to page dimensions.
+ */
+async function executeGhostscriptCrop(inputBuffer, cropParams, originalFilename) {
+  const tempId = `crop_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+  const tempDir = os.tmpdir();
+  const inputPath = path.join(tempDir, `${tempId}_in.pdf`);
+  const outputPath = path.join(tempDir, `${tempId}_cropped.pdf`);
+
+  await fs.writeFile(inputPath, inputBuffer);
+
+  // cropParams: { pages, xPercent, yPercent, widthPercent, heightPercent }
+  const { pages, x, y, width, height } = cropParams;
+
+  const gsArgs = [
+    '-sDEVICE=pdfwrite',
+    '-dCompatibilityLevel=1.4',
+    '-dNOPAUSE',
+    '-dQUIET',
+    '-dBATCH',
+    `-sOutputFile=${outputPath}`,
+    '-q', // quiet mode
+    '-dBATCH',
+    '-dNOPAUSE',
+    `-dFirstPage=${pages === 'current' ? cropParams.currentPageNumber : 1}`,
+    `-dLastPage=${pages === 'current' ? cropParams.currentPageNumber : 9999}`,
+    '-c',
+    // Custom postscript to set the new CropBox/MediaBox for selected pages
+    '[',
+    '/pdfmark',
+    `{ { ${x} 100 div PageWidth mul } { ${y} 100 div PageHeight mul } { ${width} 100 div PageWidth mul } { ${height} 100 div PageHeight mul } }`,
+    '/SetPDFcrop',
+    ']',
+    '/pdfmark',
+    '-f',
+    inputPath,
+  ];
+
+  return new Promise((resolve, reject) => {
+    const gs = spawn('gs', gsArgs);
+    let stderr = '';
+    gs.stderr.on('data', (d) => (stderr += d.toString()));
+
+    gs.on('close', async (code) => {
+      try {
+        if (code === 0) {
+          const croppedBuffer = await fs.readFile(outputPath);
+          resolve(croppedBuffer);
+        } else {
+          reject(new Error(`Ghostscript protection failed: ${stderr}`));
+        }
+      } catch (err) {
+        reject(err);
+      } finally {
+        // Cleanup temp files immediately
+        await fs.unlink(inputPath).catch(() => {});
+        await fs.unlink(outputPath).catch(() => {});
+      }
+    });
+
+    gs.on('error', (err) => {
+      reject(err);
+    });
+  });
+}
+
+// ---------------------------------------------------------
+// New Route: Crop PDF
+// ---------------------------------------------------------
+app.post('/api/crop-pdf', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No PDF file uploaded.' });
+    }
+
+    // Parse the crop parameters from the multipart request
+    const cropParams = JSON.parse(req.body.cropParams);
+
+    // cropParams structure: { pages: 'all'|'current', currentPageNumber: number, x: percent, y: percent, width: percent, height: percent }
+
+    const inputBuffer = req.file.buffer;
+    const croppedBuffer = await executeGhostscriptCrop(
+      inputBuffer,
+      cropParams,
+      req.file.originalname
+    );
+
+    const originalName = req.file.originalname.replace(/\.[^/.]+$/, '');
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="cropped_${originalName}.pdf"`);
+    res.setHeader('x-original-size', inputBuffer.length.toString());
+    res.setHeader('x-compressed-size', croppedBuffer.length.toString());
+
+    return res.send(croppedBuffer);
+  } catch (error) {
+    console.error('Ghostscript compression error:', error);
+    return res.status(500).json({ error: 'Failed to compress PDF.' });
+  }
+});
+
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`Conversion server running on port ${PORT}`);
