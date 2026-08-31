@@ -173,13 +173,53 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
   });
 
   // Crop PDF Tool State
-  const [cropPageMode, setCropPageMode] = useState('all'); // 'all' | 'current'
+  const [cropPageMode, setCropPageMode] = useState('custom'); // 'custom' | 'all' | 'current'
   const [cropCurrentPage, setCropCurrentPage] = useState(1);
   const [cropZoom, setCropZoom] = useState(68);
   const [cropPageDataUrl, setCropPageDataUrl] = useState('');
-  const [cropBox, setCropBox] = useState({ x: 5, y: 5, width: 90, height: 90 });
+  const [pageCropBoxes, setPageCropBoxes] = useState({}); // { 1: {x, y, w, h}, 2: {x, y, w, h} }
+  const DEFAULT_CROP_BOX = { x: 5, y: 5, width: 90, height: 90 };
   const cropCanvasContainerRef = useRef(null);
-  const cropDragState = useRef({ isDragging: false, isResizing: false, handle: null, startX: 0, startY: 0, initialBox: null });
+  const cropDragState = useRef({
+    isDragging: false,
+    isResizing: false,
+    handle: null,
+    startX: 0,
+    startY: 0,
+    initialBox: null,
+  });
+
+  const currentActiveBox = pageCropBoxes[cropCurrentPage] || DEFAULT_CROP_BOX;
+  const isCurrentPageCropped = Boolean(pageCropBoxes[cropCurrentPage]);
+
+  const resetCurrentPageCrop = () => {
+    setPageCropBoxes((prev) => {
+      const updated = { ...prev };
+      delete updated[cropCurrentPage];
+      return updated;
+    });
+  };
+
+  const updateCurrentPageCropBox = (updater) => {
+    setPageCropBoxes((prev) => {
+      const currentBox = prev[cropCurrentPage] || DEFAULT_CROP_BOX;
+      const nextBox = typeof updater === 'function' ? updater(currentBox) : updater;
+      
+      if (cropPageMode === 'all') {
+        // If mode is 'all', sync across all loaded pages
+        const updatedAll = {};
+        for (let i = 1; i <= totalPages; i++) {
+          updatedAll[i] = { ...nextBox };
+        }
+        return updatedAll;
+      }
+
+      return {
+        ...prev,
+        [cropCurrentPage]: nextBox
+      };
+    });
+  };
 
   useEffect(() => {
     if (isPageLevelTool && files.length > 0) {
@@ -528,7 +568,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
       handle,
       startX: e.clientX,
       startY: e.clientY,
-      initialBox: { ...cropBox }
+      initialBox: { ...currentActiveBox }
     };
 
     window.addEventListener('mousemove', handleCropMouseMove);
@@ -547,7 +587,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
     if (isDragging) {
       const newX = Math.max(0, Math.min(100 - initialBox.width, initialBox.x + deltaXPercent));
       const newY = Math.max(0, Math.min(100 - initialBox.height, initialBox.y + deltaYPercent));
-      setCropBox((prev) => ({ ...prev, x: newX, y: newY }));
+      updateCurrentPageCropBox((prev) => ({ ...prev, x: newX, y: newY }));
     } else if (isResizing) {
       let { x, y, width, height } = initialBox;
 
@@ -567,7 +607,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
           height = potentialHeight;
         }
       }
-      setCropBox({ x, y, width, height });
+      updateCurrentPageCropBox({ x, y, width, height });
     }
   };
 
@@ -615,7 +655,8 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
           output = await cropPDF(files[0], {
             pagesMode: cropPageMode,
             currentPage: cropCurrentPage,
-            box: cropBox
+            box: currentActiveBox,
+            pageBoxes: pageCropBoxes
           });
           break;
         case 'protect':
@@ -855,23 +896,23 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                         />
 
                         {/* Dimmer Overlays (Outside Crop Box) */}
-                        <div className="absolute top-0 left-0 right-0 bg-slate-900/40 pointer-events-none" style={{ height: `${cropBox.y}%` }} />
-                        <div className="absolute bottom-0 left-0 right-0 bg-slate-900/40 pointer-events-none" style={{ height: `${100 - (cropBox.y + cropBox.height)}%` }} />
-                        <div className="absolute left-0 bg-slate-900/40 pointer-events-none" style={{ top: `${cropBox.y}%`, height: `${cropBox.height}%`, width: `${cropBox.x}%` }} />
-                        <div className="absolute right-0 bg-slate-900/40 pointer-events-none" style={{ top: `${cropBox.y}%`, height: `${cropBox.height}%`, width: `${100 - (cropBox.x + cropBox.width)}%` }} />
+                        <div className="absolute top-0 left-0 right-0 bg-slate-900/40 pointer-events-none" style={{ height: `${currentActiveBox.y}%` }} />
+                        <div className="absolute bottom-0 left-0 right-0 bg-slate-900/40 pointer-events-none" style={{ height: `${100 - (currentActiveBox.y + currentActiveBox.height)}%` }} />
+                        <div className="absolute left-0 bg-slate-900/40 pointer-events-none" style={{ top: `${currentActiveBox.y}%`, height: `${currentActiveBox.height}%`, width: `${currentActiveBox.x}%` }} />
+                        <div className="absolute right-0 bg-slate-900/40 pointer-events-none" style={{ top: `${currentActiveBox.y}%`, height: `${currentActiveBox.height}%`, width: `${100 - (currentActiveBox.x + currentActiveBox.width)}%` }} />
 
                         {/* Draggable & Resizable Active Crop Box */}
                         <div
                           onMouseDown={(e) => handleCropMouseDown(e)}
                           style={{
-                            left: `${cropBox.x}%`,
-                            top: `${cropBox.y}%`,
-                            width: `${cropBox.width}%`,
-                            height: `${cropBox.height}%`
+                            left: `${currentActiveBox.x}%`,
+                            top: `${currentActiveBox.y}%`,
+                            width: `${currentActiveBox.width}%`,
+                            height: `${currentActiveBox.height}%`
                           }}
                           className="absolute border-2 border-dashed border-rose-500 cursor-move z-20 group shadow-[0_0_0_9999px_rgba(0,0,0,0.3)]"
                         >
-                          {/* Corner & Edge Resize Handles */}
+                          {/* Handles */}
                           {['nw', 'ne', 'sw', 'se', 'n', 's', 'e', 'w'].map((handle) => {
                             const posClasses = {
                               nw: '-top-1.5 -left-1.5 cursor-nwse-resize',
@@ -949,14 +990,32 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                 {/* Right Options Panel */}
                 <div className="lg:col-span-4 bg-white border border-slate-200 rounded-3xl p-6 sm:p-8 space-y-6 shadow-sm">
                   <div className="flex items-center justify-between border-b pb-4">
-                    <h3 className="text-2xl font-black text-slate-900 tracking-tight">Crop PDF</h3>
-                    <button
-                      type="button"
-                      onClick={() => setCropBox({ x: 5, y: 5, width: 90, height: 90 })}
-                      className="text-xs font-bold text-red-500 hover:text-red-700 underline cursor-pointer"
-                    >
-                      Reset all
-                    </button>
+                    <div>
+                      <h3 className="text-2xl font-black text-slate-900 tracking-tight">Crop PDF</h3>
+                      {cropPageMode === 'custom' && (
+                        <span className="text-xs font-semibold text-slate-500">
+                          {Object.keys(pageCropBoxes).length} of {totalPages} pages modified
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      {isCurrentPageCropped && cropPageMode === 'custom' && (
+                        <button
+                          type="button"
+                          onClick={resetCurrentPageCrop}
+                          className="text-xs font-bold text-amber-600 hover:text-amber-700 underline cursor-pointer"
+                        >
+                          Reset Page {cropCurrentPage}
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setPageCropBoxes({})}
+                        className="text-xs font-bold text-red-500 hover:text-red-700 underline cursor-pointer"
+                      >
+                        Reset all
+                      </button>
+                    </div>
                   </div>
 
                   {/* Info Notice Box */}
@@ -969,17 +1028,35 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
 
                   {/* Pages Option Section */}
                   <div className="space-y-3 pt-2">
-                    <label className="text-sm font-bold text-slate-900 block">Pages:</label>
-                    <div className="flex items-center space-x-6">
+                    <label className="text-sm font-bold text-slate-900 block">Apply crop to:</label>
+                    <div className="flex flex-col space-y-2">
+                      <label className="flex items-center space-x-2.5 cursor-pointer text-xs font-semibold text-slate-700">
+                        <input
+                          type="radio"
+                          name="cropPageSelection"
+                          checked={cropPageMode === 'custom'}
+                          onChange={() => setCropPageMode('custom')}
+                          className="w-4 h-4 accent-emerald-600 cursor-pointer"
+                        />
+                        <span>Custom per page (Only cropped pages will be modified)</span>
+                      </label>
+
                       <label className="flex items-center space-x-2.5 cursor-pointer text-xs font-semibold text-slate-700">
                         <input
                           type="radio"
                           name="cropPageSelection"
                           checked={cropPageMode === 'all'}
-                          onChange={() => setCropPageMode('all')}
+                          onChange={() => {
+                            setCropPageMode('all');
+                            const updatedAll = {};
+                            for (let i = 1; i <= totalPages; i++) {
+                              updatedAll[i] = { ...currentActiveBox };
+                            }
+                            setPageCropBoxes(updatedAll);
+                          }}
                           className="w-4 h-4 accent-emerald-600 cursor-pointer"
                         />
-                        <span>All pages</span>
+                        <span>Same crop across all pages</span>
                       </label>
 
                       <label className="flex items-center space-x-2.5 cursor-pointer text-xs font-semibold text-slate-700">
@@ -990,7 +1067,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                           onChange={() => setCropPageMode('current')}
                           className="w-4 h-4 accent-emerald-600 cursor-pointer"
                         />
-                        <span>Current page</span>
+                        <span>Crop only Page {cropCurrentPage}</span>
                       </label>
                     </div>
                   </div>

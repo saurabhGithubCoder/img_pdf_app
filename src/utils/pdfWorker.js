@@ -1442,33 +1442,48 @@ export async function cropPDF(file, cropOptions) {
   }
 
   const {
-    pagesMode = 'all', // 'all' | 'current'
+    pagesMode = 'custom', // 'custom' | 'all' | 'current'
     currentPage = 1,
-    box = { x: 5, y: 5, width: 90, height: 90 }
+    box = { x: 5, y: 5, width: 90, height: 90 },
+    pageBoxes = {} // Mapping of { [pageNumber]: { x, y, width, height } }
   } = cropOptions;
 
   const arrayBuffer = await file.arrayBuffer();
   const pdfDoc = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
   const totalPages = pdfDoc.getPageCount();
 
-  const pagesToCrop = pagesMode === 'all' 
-    ? pdfDoc.getPages()
-    : [pdfDoc.getPage(Math.max(0, Math.min(currentPage - 1, totalPages - 1)))];
-
-  pagesToCrop.forEach((page) => {
+  const applyCropToPage = (page, cropRect) => {
     const { width: pageWidth, height: pageHeight } = page.getSize();
-
-    // Map percentage coordinates (0-100) to PDF Point Dimensions (PDF origin is bottom-left)
-    const cropX = (box.x / 100) * pageWidth;
-    const cropWidth = Math.max(10, (box.width / 100) * pageWidth);
-    const cropHeight = Math.max(10, (box.height / 100) * pageHeight);
-    
-    // Invert Y coordinate since PDF (0,0) is bottom-left whereas DOM (0,0) is top-left
-    const cropY = pageHeight - ((box.y / 100) * pageHeight) - cropHeight;
+    const cropX = (cropRect.x / 100) * pageWidth;
+    const cropWidth = Math.max(10, (cropRect.width / 100) * pageWidth);
+    const cropHeight = Math.max(10, (cropRect.height / 100) * pageHeight);
+    const cropY = pageHeight - ((cropRect.y / 100) * pageHeight) - cropHeight;
 
     page.setCropBox(cropX, Math.max(0, cropY), cropWidth, cropHeight);
     page.setMediaBox(cropX, Math.max(0, cropY), cropWidth, cropHeight);
-  });
+  };
+
+  if (pagesMode === 'current') {
+    // Only crop the active page
+    const targetIdx = Math.max(0, Math.min(currentPage - 1, totalPages - 1));
+    const targetBox = pageBoxes[currentPage] || box;
+    applyCropToPage(pdfDoc.getPage(targetIdx), targetBox);
+  } else if (pagesMode === 'custom') {
+    // Only crop pages that have been explicitly modified in pageBoxes
+    const pages = pdfDoc.getPages();
+    pages.forEach((page, idx) => {
+      const pageNum = idx + 1;
+      if (pageBoxes[pageNum]) {
+        applyCropToPage(page, pageBoxes[pageNum]);
+      }
+    });
+  } else {
+    // 'all' mode: apply the same uniform box to all pages
+    const pages = pdfDoc.getPages();
+    pages.forEach((page) => {
+      applyCropToPage(page, box);
+    });
+  }
 
   const pdfBytes = await pdfDoc.save({ useObjectStreams: true });
   return {
