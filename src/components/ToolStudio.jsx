@@ -221,6 +221,84 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
     });
   };
 
+  // Helper to extract clientX and clientY from either Mouse or Touch event
+  const getPointerPos = (e) => {
+    if (e.touches && e.touches.length > 0) {
+      return { clientX: e.touches[0].clientX, clientY: e.touches[0].clientY };
+    }
+    return { clientX: e.clientX, clientY: e.clientY };
+  };
+
+  // Crop Drag & Resize Handlers (Unified Mouse + Touch for Mobile)
+  const handleCropPointerDown = (e, handle = null) => {
+    e.stopPropagation();
+    // Allow preventDefault only if cancelable to avoid touch-scroll conflict
+    if (e.cancelable) e.preventDefault();
+
+    const { clientX, clientY } = getPointerPos(e);
+
+    cropDragState.current = {
+      isDragging: !handle,
+      isResizing: Boolean(handle),
+      handle,
+      startX: clientX,
+      startY: clientY,
+      initialBox: { ...currentActiveBox }
+    };
+
+    window.addEventListener('mousemove', handleCropPointerMove, { passive: false });
+    window.addEventListener('mouseup', handleCropPointerUp);
+    window.addEventListener('touchmove', handleCropPointerMove, { passive: false });
+    window.addEventListener('touchend', handleCropPointerUp);
+  };
+
+  const handleCropPointerMove = (e) => {
+    const { isDragging, isResizing, handle, startX, startY, initialBox } = cropDragState.current;
+    if (!isDragging && !isResizing) return;
+    if (!cropCanvasContainerRef.current) return;
+
+    if (e.cancelable) e.preventDefault();
+
+    const { clientX, clientY } = getPointerPos(e);
+    const rect = cropCanvasContainerRef.current.getBoundingClientRect();
+    const deltaXPercent = ((clientX - startX) / rect.width) * 100;
+    const deltaYPercent = ((clientY - startY) / rect.height) * 100;
+
+    if (isDragging) {
+      const newX = Math.max(0, Math.min(100 - initialBox.width, initialBox.x + deltaXPercent));
+      const newY = Math.max(0, Math.min(100 - initialBox.height, initialBox.y + deltaYPercent));
+      updateCurrentPageCropBox((prev) => ({ ...prev, x: newX, y: newY }));
+    } else if (isResizing) {
+      let { x, y, width, height } = initialBox;
+
+      if (handle.includes('e')) width = Math.max(5, Math.min(100 - x, width + deltaXPercent));
+      if (handle.includes('s')) height = Math.max(5, Math.min(100 - y, height + deltaYPercent));
+      if (handle.includes('w')) {
+        const potentialWidth = width - deltaXPercent;
+        if (potentialWidth >= 5 && x + deltaXPercent >= 0) {
+          x += deltaXPercent;
+          width = potentialWidth;
+        }
+      }
+      if (handle.includes('n')) {
+        const potentialHeight = height - deltaYPercent;
+        if (potentialHeight >= 5 && y + deltaYPercent >= 0) {
+          y += deltaYPercent;
+          height = potentialHeight;
+        }
+      }
+      updateCurrentPageCropBox({ x, y, width, height });
+    }
+  };
+
+  const handleCropPointerUp = () => {
+    cropDragState.current = { isDragging: false, isResizing: false, handle: null, startX: 0, startY: 0, initialBox: null };
+    window.removeEventListener('mousemove', handleCropPointerMove);
+    window.removeEventListener('mouseup', handleCropPointerUp);
+    window.removeEventListener('touchmove', handleCropPointerMove);
+    window.removeEventListener('touchend', handleCropPointerUp);
+  };
+
   useEffect(() => {
     if (isPageLevelTool && files.length > 0) {
       if (tool.id === 'crop') {
@@ -874,9 +952,9 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
             {tool.id === 'crop' && (
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
                 {/* Left Preview Canvas */}
-                <div className="lg:col-span-8 bg-slate-200/60 rounded-3xl p-6 border border-slate-200 flex flex-col items-center min-h-[580px] relative overflow-hidden">
+                <div className="lg:col-span-8 bg-slate-200/60 rounded-3xl p-3 sm:p-6 border border-slate-200 flex flex-col items-center min-h-[420px] sm:min-h-[580px] relative overflow-hidden">
                   {isRenderingPages ? (
-                    <div className="py-44 flex flex-col items-center justify-center space-y-3 text-slate-400">
+                    <div className="py-32 sm:py-44 flex flex-col items-center justify-center space-y-3 text-slate-400">
                       <Loader2 className="w-10 h-10 animate-spin text-rose-500" />
                       <p className="text-xs font-semibold">Rendering page for cropping...</p>
                     </div>
@@ -884,18 +962,18 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                     <div className="w-full flex flex-col items-center justify-center">
                       <div
                         ref={cropCanvasContainerRef}
-                        style={{ width: `${cropZoom}%` }}
-                        className="relative bg-white shadow-xl rounded-md transition-all duration-150 select-none overflow-hidden"
+                        style={{ width: `${Math.min(100, Math.max(cropZoom, 80))}%` }}
+                        className="relative bg-white shadow-xl rounded-md transition-all duration-150 select-none overflow-hidden touch-none"
                       >
                         {/* Page Preview Image */}
                         <img
                           src={cropPageDataUrl}
                           alt={`Page ${cropCurrentPage}`}
-                          className="w-full h-auto pointer-events-none block"
+                          className="w-full h-auto pointer-events-none block select-none"
                           draggable={false}
                         />
 
-                        {/* Dimmer Overlays (Outside Crop Box) */}
+                        {/* Dimmer Overlays */}
                         <div className="absolute top-0 left-0 right-0 bg-slate-900/40 pointer-events-none" style={{ height: `${currentActiveBox.y}%` }} />
                         <div className="absolute bottom-0 left-0 right-0 bg-slate-900/40 pointer-events-none" style={{ height: `${100 - (currentActiveBox.y + currentActiveBox.height)}%` }} />
                         <div className="absolute left-0 bg-slate-900/40 pointer-events-none" style={{ top: `${currentActiveBox.y}%`, height: `${currentActiveBox.height}%`, width: `${currentActiveBox.x}%` }} />
@@ -903,40 +981,42 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
 
                         {/* Draggable & Resizable Active Crop Box */}
                         <div
-                          onMouseDown={(e) => handleCropMouseDown(e)}
+                          onMouseDown={(e) => handleCropPointerDown(e)}
+                          onTouchStart={(e) => handleCropPointerDown(e)}
                           style={{
                             left: `${currentActiveBox.x}%`,
                             top: `${currentActiveBox.y}%`,
                             width: `${currentActiveBox.width}%`,
                             height: `${currentActiveBox.height}%`
                           }}
-                          className="absolute border-2 border-dashed border-rose-500 cursor-move z-20 group shadow-[0_0_0_9999px_rgba(0,0,0,0.3)]"
+                          className="absolute border-2 border-dashed border-rose-500 cursor-move z-20 group shadow-[0_0_0_9999px_rgba(0,0,0,0.3)] touch-none"
                         >
-                          {/* Handles */}
+                          {/* Handles with larger mobile tap-targets */}
                           {['nw', 'ne', 'sw', 'se', 'n', 's', 'e', 'w'].map((handle) => {
                             const posClasses = {
-                              nw: '-top-1.5 -left-1.5 cursor-nwse-resize',
-                              ne: '-top-1.5 -right-1.5 cursor-nesw-resize',
-                              sw: '-bottom-1.5 -left-1.5 cursor-nesw-resize',
-                              se: '-bottom-1.5 -right-1.5 cursor-nwse-resize',
-                              n: '-top-1.5 left-1/2 -translate-x-1/2 cursor-ns-resize',
-                              s: '-bottom-1.5 left-1/2 -translate-x-1/2 cursor-ns-resize',
-                              e: 'top-1/2 -right-1.5 -translate-y-1/2 cursor-ew-resize',
-                              w: 'top-1/2 -left-1.5 -translate-y-1/2 cursor-ew-resize',
+                              nw: '-top-2.5 -left-2.5 cursor-nwse-resize',
+                              ne: '-top-2.5 -right-2.5 cursor-nesw-resize',
+                              sw: '-bottom-2.5 -left-2.5 cursor-nesw-resize',
+                              se: '-bottom-2.5 -right-2.5 cursor-nwse-resize',
+                              n: '-top-2.5 left-1/2 -translate-x-1/2 cursor-ns-resize',
+                              s: '-bottom-2.5 left-1/2 -translate-x-1/2 cursor-ns-resize',
+                              e: 'top-1/2 -right-2.5 -translate-y-1/2 cursor-ew-resize',
+                              w: 'top-1/2 -left-2.5 -translate-y-1/2 cursor-ew-resize',
                             };
                             return (
                               <div
                                 key={handle}
-                                onMouseDown={(e) => handleCropMouseDown(e, handle)}
-                                className={`absolute w-3 h-3 bg-white border-2 border-rose-500 rounded-sm shadow-sm ${posClasses[handle]}`}
+                                onMouseDown={(e) => handleCropPointerDown(e, handle)}
+                                onTouchStart={(e) => handleCropPointerDown(e, handle)}
+                                className={`absolute w-5 h-5 sm:w-3.5 sm:h-3.5 bg-white border-2 border-rose-500 rounded-sm shadow-md touch-none z-30 ${posClasses[handle]}`}
                               />
                             );
                           })}
                         </div>
                       </div>
 
-                      {/* Bottom Floating Viewer Control Bar */}
-                      <div className="mt-8 bg-slate-800/90 backdrop-blur-md text-white px-4 py-2 rounded-2xl flex items-center space-x-3 text-xs shadow-lg">
+                      {/* Floating Bottom Control Bar (Responsive for Mobile) */}
+                      <div className="mt-5 sm:mt-8 bg-slate-800/90 backdrop-blur-md text-white px-3 py-1.5 sm:px-4 sm:py-2 rounded-2xl flex items-center space-x-2 sm:space-x-3 text-xs shadow-lg max-w-full overflow-x-auto">
                         <button
                           type="button"
                           onClick={() => setCropCurrentPage((p) => Math.max(1, p - 1))}
@@ -961,7 +1041,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                         <div className="h-4 w-px bg-slate-600" />
                         <button
                           type="button"
-                          onClick={() => setCropZoom((z) => Math.max(40, z - 10))}
+                          onClick={() => setCropZoom((z) => Math.max(50, z - 10))}
                           className="p-1 hover:bg-slate-700 rounded-lg cursor-pointer"
                         >
                           <ZoomOut className="w-3.5 h-3.5" />
@@ -977,7 +1057,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                         <div className="h-4 w-px bg-slate-600" />
                         <button
                           type="button"
-                          onClick={() => setCropZoom(68)}
+                          onClick={() => setCropZoom(85)}
                           className="p-1 hover:bg-slate-700 rounded-lg text-slate-300 hover:text-white cursor-pointer"
                         >
                           <Maximize className="w-3.5 h-3.5" />
