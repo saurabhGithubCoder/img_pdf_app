@@ -609,8 +609,8 @@ export async function pdfToMarkdown(file) {
     const formData = new FormData();
     formData.append('file', file);
 
-    const response = await fetch('/api/convert/pdf-to-markdown', {
-    //const response = await fetch(`${API_BASE_URL}/api/convert/pdf-to-markdown`, {
+    //const response = await fetch('/api/convert/pdf-to-markdown', {
+    const response = await fetch(`${API_BASE_URL}/api/convert/pdf-to-markdown`, {
       method: 'POST',
       body: formData,
     });
