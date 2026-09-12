@@ -136,7 +136,12 @@ export async function renderPdfThumbnails(file) {
 /**
  * Render a high-resolution single page of a PDF for the Crop Workspace
  */
-export async function renderSinglePdfPage(file, pageNum = 1, scale = 1.6) {
+/**
+ * Render a high-resolution single page of a PDF for the Workspaces.
+ * Added `hideAnnotations` option so existing AcroForm widgets don't get baked
+ * into the background image when manipulating PDF forms.
+ */
+export async function renderSinglePdfPage(file, pageNum = 1, scale = 1.6, hideAnnotations = false) {
   const isLocked = await checkPdfPassword(file);
   if (isLocked) {
     const err = new Error(`"${file.name}" is password-protected and cannot be processed.`);
@@ -156,7 +161,15 @@ export async function renderSinglePdfPage(file, pageNum = 1, scale = 1.6) {
   canvas.height = viewport.height;
   canvas.width = viewport.width;
 
-  await page.render({ canvasContext: ctx, viewport }).promise;
+  // Render context options
+  const renderContext = {
+    canvasContext: ctx,
+    viewport,
+    // When true, suppresses baking embedded AcroForm text/borders directly into the canvas
+    annotationMode: hideAnnotations ? pdfjsLib.AnnotationMode.DISABLE : pdfjsLib.AnnotationMode.ENABLE,
+  };
+
+  await page.render(renderContext).promise;
 
   return {
     dataUrl: canvas.toDataURL('image/jpeg', 0.95),
@@ -1614,7 +1627,8 @@ export async function unlockPDF(file, options = {}) {
 
 /**
  * Advanced AcroForm & Widget Field Parser
- * Safely extracts existing form fields without crashing on XFA, AcroJS, or non-standard dictionaries.
+ * Safely extracts existing form fields and maps their coordinates to normalized percentage values
+ * so they can be selected, edited, typed into, and deleted exactly like manually added fields.
  */
 export async function extractPdfFormFields(file) {
   const isLocked = await checkPdfPassword(file);
@@ -1628,6 +1642,7 @@ export async function extractPdfFormFields(file) {
   const pdfDoc = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
   const form = pdfDoc.getForm();
   const fields = [];
+  const pages = pdfDoc.getPages();
 
   try {
     const rawFields = form.getFields();
@@ -1635,19 +1650,28 @@ export async function extractPdfFormFields(file) {
     rawFields.forEach((field, index) => {
       try {
         const name = field.getName();
-        const type = field.constructor.name; // PDFTextField, PDFCheckBox, PDFRadioGroup, PDFDropdown, etc.
+        const type = field.constructor.name;
         const widgets = field.acroField.getWidgets();
 
         widgets.forEach((widget, wIdx) => {
           const rect = widget.getRectangle();
+          
           // Resolve Page index for the widget
           const pRef = widget.P();
           let pageIndex = 0;
           if (pRef) {
-            const pages = pdfDoc.getPages();
             const foundIdx = pages.findIndex(p => p.ref === pRef);
             if (foundIdx !== -1) pageIndex = foundIdx;
           }
+
+          const targetPage = pages[pageIndex] || pages[0];
+          const { width: pWidth, height: pHeight } = targetPage.getSize();
+
+          // Convert PDF points (origin bottom-left) to Normalized DOM Percentages (origin top-left)
+          const widthPercent = Math.max(2, (rect.width / pWidth) * 100);
+          const heightPercent = Math.max(1.5, (rect.height / pHeight) * 100);
+          const xPercent = Math.max(0, Math.min(100 - widthPercent, (rect.x / pWidth) * 100));
+          const yPercent = Math.max(0, Math.min(100 - heightPercent, ((pHeight - rect.y - rect.height) / pHeight) * 100));
 
           let fieldType = 'text';
           let value = '';
@@ -1658,12 +1682,16 @@ export async function extractPdfFormFields(file) {
             try { value = field.isChecked(); } catch { value = false; }
           } else if (type.includes('Radio')) {
             fieldType = 'radio';
-            try { value = field.getSelected() || ''; options = field.getOptions() || []; } catch { value = ''; }
-          } else if (type.includes('Dropdown') || type.includes('OptionList')) {
+            try { 
+              value = field.getSelected() || ''; 
+              options = field.getOptions() || []; 
+            } catch { value = ''; }
+          } else if (type.includes('Dropdown') || type.includes('OptionList') || type.includes('Choice')) {
             fieldType = type.includes('Dropdown') ? 'combobox' : 'listbox';
             try { 
               options = field.getOptions() || [];
-              value = field.getSelected()?.[0] || '';
+              const selected = field.getSelected();
+              value = Array.isArray(selected) ? selected[0] || '' : selected || '';
             } catch { options = []; }
           } else if (type.includes('Signature')) {
             fieldType = 'signature';
@@ -1675,22 +1703,25 @@ export async function extractPdfFormFields(file) {
           fields.push({
             id: `detected-${index}-${wIdx}-${Date.now()}`,
             name: name || `Field_${index + 1}`,
+            originalName: name, // Track original AcroField name for delete/update
             type: fieldType,
             page: pageIndex + 1,
-            x: rect.x,
-            y: rect.y,
-            width: rect.width || 120,
-            height: rect.height || 24,
+            xPercent,
+            yPercent,
+            widthPercent,
+            heightPercent,
             value: value,
             options: options,
-            readOnly: field.isReadOnly ? field.isReadOnly() : false,
+            readOnly: false, // Make unlocked by default so user can edit in tool
             required: field.isRequired ? field.isRequired() : false,
             multiline: field.isMultiline ? field.isMultiline() : false,
+            includeIndicator: false,
+            indicatorText: 'Fill Here',
             isExisting: true,
             fontSize: 11,
             fontFamily: 'Helvetica',
             color: '#000000',
-            strokeColor: '#000000',
+            strokeColor: '#3b82f6',
             isBold: false,
             isItalic: false,
             isUnderline: false
@@ -1712,7 +1743,7 @@ export async function extractPdfFormFields(file) {
 
 /**
  * Bake filled form data and create genuine, interactive, editable AcroForm widgets in the PDF.
- * Handles interactive fields, static form text annotations, and field indicator pointer stamps.
+ * Purges original widgets so that deletions and drag-moves never duplicate or leave ghost fields.
  */
 export async function savePdfForms(file, formFields) {
   const isLocked = await checkPdfPassword(file);
@@ -1725,7 +1756,41 @@ export async function savePdfForms(file, formFields) {
   const arrayBuffer = await file.arrayBuffer();
   const pdfDoc = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
   const form = pdfDoc.getForm();
+  const pages = pdfDoc.getPages();
 
+  // ------------------------------------------------------------------
+  // STEP 1: Physically purge all existing AcroForm fields and Widget Annots
+  // This prevents deleted fields from lingering and moved fields from duplicating!
+  // ------------------------------------------------------------------
+  try {
+    const existingAcroFields = [...form.getFields()];
+    existingAcroFields.forEach((f) => {
+      try {
+        form.removeField(f);
+      } catch (_) {}
+    });
+
+    // Clean up annotation references on each page so no ghost borders stay behind
+    pages.forEach((page) => {
+      const annots = page.node.Annots();
+      if (annots) {
+        for (let i = annots.size() - 1; i >= 0; i--) {
+          const annotRef = annots.get(i);
+          const annotDict = pdfDoc.context.lookup(annotRef);
+          const subtype = annotDict?.get(pdfDoc.context.obj('Subtype'))?.toString();
+          if (subtype === '/Widget') {
+            annots.remove(i);
+          }
+        }
+      }
+    });
+  } catch (cleanErr) {
+    console.warn('Cleanup error:', cleanErr);
+  }
+
+  // ------------------------------------------------------------------
+  // STEP 2: Re-embed fonts for interactive appearances
+  // ------------------------------------------------------------------
   const fonts = {
     Helvetica: await pdfDoc.embedFont(StandardFonts.Helvetica),
     HelveticaBold: await pdfDoc.embedFont(StandardFonts.HelveticaBold),
@@ -1735,8 +1800,9 @@ export async function savePdfForms(file, formFields) {
     CourierBold: await pdfDoc.embedFont(StandardFonts.CourierBold),
   };
 
-  const pages = pdfDoc.getPages();
-
+  // ------------------------------------------------------------------
+  // STEP 3: Recreate ONLY the currently active fields at their latest coordinates
+  // ------------------------------------------------------------------
   for (let i = 0; i < formFields.length; i++) {
     const field = formFields[i];
     const targetPage = pages[Math.max(0, Math.min(field.page - 1, pages.length - 1))];
@@ -1760,7 +1826,7 @@ export async function savePdfForms(file, formFields) {
     const b = parseInt(hex.substring(4, 6), 16) / 255 || 0;
     const textColor = rgb(r, g, b);
 
-    // 1. Static Form Text (Pure text annotation, not an interactive widget)
+    // 1. Static Form Text (Annotation only)
     if (field.type === 'formtext') {
       if (field.value) {
         targetPage.drawText(String(field.value), {
@@ -1785,8 +1851,8 @@ export async function savePdfForms(file, formFields) {
       continue;
     }
 
-    // 2. Field Indicator Stamp (When enabled on an interactive widget)
-    if (field.includeIndicator && field.type !== 'formtext') {
+    // 2. Field Indicator Stamp (If enabled)
+    if (field.includeIndicator) {
       const indLabel = field.indicatorText || 'Sign Here';
       const indFontSize = 8;
       const indPadding = 4;
@@ -1813,19 +1879,13 @@ export async function savePdfForms(file, formFields) {
       });
     }
 
-    // 3. Interactive AcroForm Widgets
-    const fieldName = (field.name && field.name.trim())
-      ? `${field.name.trim().replace(/[^a-zA-Z0-9_-]/g, '_')}_${i}`
-      : `FormField_${i}_${Date.now()}`;
+    // 3. Recreate clean AcroForm Widgets with unique names
+    const cleanBase = (field.name || `field_${i}`).trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+    const uniqueFieldName = `${cleanBase}_${i}`;
 
     try {
       if (field.type === 'checkbox') {
-        let checkBox;
-        try {
-          checkBox = form.createCheckBox(fieldName);
-        } catch {
-          checkBox = form.createCheckBox(`${fieldName}_${Math.random().toString(36).substring(2, 6)}`);
-        }
+        const checkBox = form.createCheckBox(uniqueFieldName);
         checkBox.addToPage(targetPage, {
           x: pdfX,
           y: pdfY,
@@ -1839,11 +1899,11 @@ export async function savePdfForms(file, formFields) {
         if (field.readOnly) checkBox.enableReadOnly();
         if (field.required) checkBox.enableRequired();
       } else if (field.type === 'radio') {
-        const groupName = field.group || `RadioGroup_${field.page}_${i}`;
+        const groupName = field.group || `RadioGroup_${field.page}`;
         let radioGroup;
         try {
           radioGroup = form.getRadioGroup(groupName);
-        } catch {
+        } catch (_) {
           radioGroup = form.createRadioGroup(groupName);
         }
 
@@ -1859,12 +1919,7 @@ export async function savePdfForms(file, formFields) {
         if (field.readOnly) radioGroup.enableReadOnly();
         if (field.required) radioGroup.enableRequired();
       } else if (field.type === 'combobox') {
-        let dropdown;
-        try {
-          dropdown = form.createDropdown(fieldName);
-        } catch {
-          dropdown = form.createDropdown(`${fieldName}_${Math.random().toString(36).substring(2, 6)}`);
-        }
+        const dropdown = form.createDropdown(uniqueFieldName);
         dropdown.addToPage(targetPage, {
           x: pdfX,
           y: pdfY,
@@ -1872,30 +1927,24 @@ export async function savePdfForms(file, formFields) {
           height: pdfHeight,
         });
 
-        try { dropdown.setFontSize(targetFontSize); } catch (_) {}
-
-        const optionsList = (field.options && field.options.length > 0)
+        const optionsList = field.options && field.options.length > 0
           ? field.options
-          : ['Option 1', 'Option 2', 'Option 3'];
-        
-        dropdown.setOptions(optionsList);
+          : ['Option 1', 'Option 2'];
 
+        dropdown.setOptions(optionsList);
         if (field.value && optionsList.includes(field.value)) {
           dropdown.select(field.value);
         } else if (optionsList.length > 0) {
           dropdown.select(optionsList[0]);
         }
 
+        try { dropdown.setFontSize(targetFontSize); } catch (_) {}
         dropdown.updateAppearances(fontRef);
+
         if (field.readOnly) dropdown.enableReadOnly();
         if (field.required) dropdown.enableRequired();
       } else if (field.type === 'listbox') {
-        let optionList;
-        try {
-          optionList = form.createOptionList(fieldName);
-        } catch {
-          optionList = form.createOptionList(`${fieldName}_${Math.random().toString(36).substring(2, 6)}`);
-        }
+        const optionList = form.createOptionList(uniqueFieldName);
         optionList.addToPage(targetPage, {
           x: pdfX,
           y: pdfY,
@@ -1903,28 +1952,22 @@ export async function savePdfForms(file, formFields) {
           height: pdfHeight,
         });
 
-        try { optionList.setFontSize(Math.max(6, targetFontSize - 1)); } catch (_) {}
-
-        const optionsList = (field.options && field.options.length > 0)
+        const optionsList = field.options && field.options.length > 0
           ? field.options
-          : ['Option 1', 'Option 2', 'Option 3'];
-        
-        optionList.setOptions(optionsList);
+          : ['Option 1', 'Option 2'];
 
+        optionList.setOptions(optionsList);
         if (field.value && optionsList.includes(field.value)) {
           optionList.select(field.value);
         }
 
+        try { optionList.setFontSize(Math.max(6, targetFontSize - 1)); } catch (_) {}
         optionList.updateAppearances(fontRef);
+
         if (field.readOnly) optionList.enableReadOnly();
         if (field.required) optionList.enableRequired();
       } else if (field.type === 'signature') {
-        let tf;
-        try {
-          tf = form.createTextField(fieldName);
-        } catch {
-          tf = form.createTextField(`${fieldName}_${Math.random().toString(36).substring(2, 6)}`);
-        }
+        const tf = form.createTextField(uniqueFieldName);
         tf.addToPage(targetPage, {
           x: pdfX,
           y: pdfY,
@@ -1933,17 +1976,12 @@ export async function savePdfForms(file, formFields) {
         });
 
         try { tf.setFontSize(Math.max(9, targetFontSize)); } catch (_) {}
-
         if (field.value) tf.setText(String(field.value));
         tf.updateAppearances(fonts.TimesBold);
         if (field.readOnly) tf.enableReadOnly();
       } else {
-        let tf;
-        try {
-          tf = form.createTextField(fieldName);
-        } catch {
-          tf = form.createTextField(`${fieldName}_${Math.random().toString(36).substring(2, 6)}`);
-        }
+        // Text field
+        const tf = form.createTextField(uniqueFieldName);
         tf.addToPage(targetPage, {
           x: pdfX,
           y: pdfY,
@@ -1951,35 +1989,19 @@ export async function savePdfForms(file, formFields) {
           height: pdfHeight,
         });
 
-        if (field.multiline) {
-          tf.enableMultiline();
-        }
+        if (field.multiline) tf.enableMultiline();
+        try { tf.setFontSize(targetFontSize); } catch (_) {}
 
-        try {
-          tf.setFontSize(targetFontSize);
-        } catch (_) {}
-
-        if (field.value) {
+        if (field.value !== undefined && field.value !== '') {
           tf.setText(String(field.value));
         }
 
         tf.updateAppearances(fontRef);
-
         if (field.readOnly) tf.enableReadOnly();
         if (field.required) tf.enableRequired();
       }
-    } catch (createErr) {
-      console.warn(`Fallback for field "${fieldName}":`, createErr);
-      if (field.value) {
-        targetPage.drawText(String(field.value), {
-          x: pdfX + 2,
-          y: pdfY + (pdfHeight / 2) - (targetFontSize / 2.5),
-          size: targetFontSize,
-          font: fontRef,
-          color: textColor,
-          maxWidth: pdfWidth - 4
-        });
-      }
+    } catch (err) {
+      console.warn(`Error writing field ${uniqueFieldName}:`, err);
     }
   }
 

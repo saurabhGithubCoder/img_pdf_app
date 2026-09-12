@@ -364,7 +364,8 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
 
   const renderCurrentFormPage = async (file, pageNum) => {
     try {
-      const data = await renderSinglePdfPage(file, pageNum, 1.8);
+      // Pass `true` as 4th argument to disable baking existing fields into the background preview image
+      const data = await renderSinglePdfPage(file, pageNum, 1.8, true);
       setFormPageDataUrl(data.dataUrl);
       setFormTotalPages(data.totalPages);
       if (data.width && data.height) {
@@ -386,7 +387,9 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
 
   const deleteSelectedField = (id) => {
     setFormFields((prev) => prev.filter((f) => f.id !== id));
-    if (selectedFieldId === id) setSelectedFieldId(null);
+    if (selectedFieldId === id) {
+      setSelectedFieldId(null);
+    }
   };
 
   const handleCanvasClickToAddField = (e) => {
@@ -1273,14 +1276,14 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                                         width: `${field.widthPercent}%`,
                                         height: `${field.heightPercent}%`,
                                       }}
-                                      className={`group absolute flex items-center justify-center transition-all ${
+                                      className={`group absolute flex items-center justify-center transition-all bg-white ${
                                         field.type === 'formtext'
                                           ? isSelected
                                             ? 'border border-dashed border-red-500 bg-red-50/20'
                                             : 'border border-transparent hover:border-red-300'
                                           : isSelected
-                                          ? 'border-2 border-blue-500 bg-blue-50/50 shadow-md z-30'
-                                          : 'border border-blue-300/80 bg-blue-50/20 hover:border-blue-400 z-20'
+                                          ? 'border-2 border-blue-500 bg-white shadow-md z-30'
+                                          : 'border border-blue-300/80 bg-white hover:border-blue-400 z-20'
                                       } ${formMode === 'edit' ? 'cursor-move' : 'cursor-pointer'}`}
                                     >
                                       {/* Left Arrow Field Indicator Badge */}
