@@ -866,6 +866,12 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
       badgeColor = 'bg-amber-600 text-white';
       borderColor = 'border-amber-200';
       bgGradient = 'from-amber-50/50 to-slate-50';
+    } else if (tool.id === 'to-markdown') {
+      IconComp = FileText;
+      badgeText = 'MD';
+      badgeColor = 'bg-blue-600 text-white';
+      borderColor = 'border-blue-200';
+      bgGradient = 'from-blue-50/50 to-slate-50';
     }
 
     return (
@@ -2288,7 +2294,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                   onClick={executeAction}
                   disabled={isProcessing}
                   className={`w-full py-4 text-white font-bold rounded-2xl shadow-md transition flex items-center justify-center space-x-2 cursor-pointer ${
-                    tool.id === 'word-to-pdf' || tool.id === 'pdf-to-word' ? 'bg-blue-600 hover:bg-blue-700' :
+                    tool.id === 'word-to-pdf' || tool.id === 'pdf-to-word' || tool.id === 'to-markdown' ? 'bg-blue-600 hover:bg-blue-700' :
                     tool.id === 'powerpoint-to-pdf' || tool.id === 'pdf-to-powerpoint' ? 'bg-orange-600 hover:bg-orange-700' :
                     tool.id === 'excel-to-pdf' || tool.id === 'pdf-to-excel' ? 'bg-emerald-600 hover:bg-emerald-700' :
                     tool.id === 'html-to-pdf' ? 'bg-amber-600 hover:bg-amber-700' : 'bg-rose-600 hover:bg-rose-700'
@@ -2301,7 +2307,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                     </div>
                   ) : (
                     <>
-                      <span>Convert to PDF</span>
+                      <span>{tool.id === 'to-markdown' ? 'Convert to Markdown' : tool.id.endsWith('-to-pdf') ? 'Convert to PDF' : 'Convert Document'}</span>
                       <ArrowRight className="w-4 h-4" />
                     </>
                   )}

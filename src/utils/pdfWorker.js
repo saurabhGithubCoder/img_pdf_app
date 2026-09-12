@@ -594,23 +594,71 @@ export async function pdfToJpg(file) {
 }
 
 /**
- * Extract plain text and convert to Markdown.
+ * Extract plain text, format tables, indentation, and headings into Markdown.
  */
 export async function pdfToMarkdown(file) {
+  const isLocked = await checkPdfPassword(file);
+  if (isLocked) {
+    const err = new Error(`Cannot process: "${file.name}" is password-protected.`);
+    err.lockedFiles = [file.name];
+    throw err;
+  }
+
+  // 1. Primary: Server-side PyMuPDF Table & Heading Engine
+  try {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const response = await fetch('/api/convert/pdf-to-markdown', {
+    //const response = await fetch(`${API_BASE_URL}/api/convert/pdf-to-markdown`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (response.ok) {
+      const mdBlob = await response.blob();
+      const baseName = file.name.replace(/\.[^/.]+$/, '');
+      return {
+        blob: mdBlob,
+        filename: `${baseName}.md`,
+        originalSize: file.size,
+        compressedSize: mdBlob.size,
+      };
+    }
+  } catch (err) {
+    console.warn('Backend Markdown conversion error, using fallback:', err);
+  }
+
+  // 2. Secondary Fallback: In-browser structured line-grouped extraction
   const pdf = await loadPdfJsSafely(file);
-  let markdown = `# Extracted Content: ${file.name}\n\n`;
+  let markdown = `# ${file.name.replace(/\.[^/.]+$/, '')}\n\n`;
 
   for (let i = 1; i <= pdf.numPages; i++) {
     const page = await pdf.getPage(i);
     const textContent = await page.getTextContent();
-    const textItems = textContent.items.map((item) => item.str).join(' ');
+    
+    // Group items by vertical baseline
+    const lineMap = new Map();
+    for (const item of textContent.items) {
+      if (!item.str) continue;
+      const y = Math.round(item.transform[5]);
+      if (!lineMap.has(y)) {
+        lineMap.set(y, []);
+      }
+      lineMap.get(y).push(item.str);
+    }
 
-    markdown += `## Page ${i}\n\n${textItems}\n\n`;
+    const sortedY = Array.from(lineMap.keys()).sort((a, b) => b - a);
+    const pageLines = sortedY.map((y) => lineMap.get(y).join(' ').trim()).filter(Boolean);
+
+    markdown += `## Page ${i}\n\n${pageLines.join('\n\n')}\n\n`;
   }
 
   return {
     blob: new Blob([markdown], { type: 'text/markdown;charset=utf-8' }),
-    filename: `${file.name.replace(/\.[^/.]+$/, '')}.md`
+    filename: `${file.name.replace(/\.[^/.]+$/, '')}.md`,
+    originalSize: file.size,
+    compressedSize: markdown.length,
   };
 }
 

@@ -98,7 +98,7 @@ export const PDF_CATEGORIES = [
     tools: [
       { id: 'summarizer', name: 'AI Summarizer', desc: 'Get key summaries and actionable insights instantly.', icon: Sparkles, color: 'text-indigo-500', bg: 'bg-indigo-50', inactive: true, badge: 'Coming Soon' },
       { id: 'translate', name: 'Translate PDF', desc: 'Translate document contents into 50+ languages.', icon: Languages, color: 'text-violet-500', bg: 'bg-violet-50', inactive: true, badge: 'Coming Soon' },
-      { id: 'to-markdown', name: 'PDF to Markdown', desc: 'Convert structured documents to clean Markdown.', icon: FileDown, color: 'text-blue-500', bg: 'bg-blue-50', inactive: true, badge: 'Coming Soon' },
+      { id: 'to-markdown', name: 'PDF to Markdown', desc: 'Convert structured documents to clean Markdown.', icon: FileDown, color: 'text-blue-500', bg: 'bg-blue-50' },
     ],
   },
 ];
