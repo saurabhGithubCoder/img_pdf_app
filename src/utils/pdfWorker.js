@@ -1611,3 +1611,383 @@ export async function unlockPDF(file, options = {}) {
     compressedSize: blob.size,
   };
 }
+
+/**
+ * Advanced AcroForm & Widget Field Parser
+ * Safely extracts existing form fields without crashing on XFA, AcroJS, or non-standard dictionaries.
+ */
+export async function extractPdfFormFields(file) {
+  const isLocked = await checkPdfPassword(file);
+  if (isLocked) {
+    const err = new Error(`"${file.name}" is password-protected.`);
+    err.lockedFiles = [file.name];
+    throw err;
+  }
+
+  const arrayBuffer = await file.arrayBuffer();
+  const pdfDoc = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
+  const form = pdfDoc.getForm();
+  const fields = [];
+
+  try {
+    const rawFields = form.getFields();
+
+    rawFields.forEach((field, index) => {
+      try {
+        const name = field.getName();
+        const type = field.constructor.name; // PDFTextField, PDFCheckBox, PDFRadioGroup, PDFDropdown, etc.
+        const widgets = field.acroField.getWidgets();
+
+        widgets.forEach((widget, wIdx) => {
+          const rect = widget.getRectangle();
+          // Resolve Page index for the widget
+          const pRef = widget.P();
+          let pageIndex = 0;
+          if (pRef) {
+            const pages = pdfDoc.getPages();
+            const foundIdx = pages.findIndex(p => p.ref === pRef);
+            if (foundIdx !== -1) pageIndex = foundIdx;
+          }
+
+          let fieldType = 'text';
+          let value = '';
+          let options = [];
+
+          if (type.includes('CheckBox')) {
+            fieldType = 'checkbox';
+            try { value = field.isChecked(); } catch { value = false; }
+          } else if (type.includes('Radio')) {
+            fieldType = 'radio';
+            try { value = field.getSelected() || ''; options = field.getOptions() || []; } catch { value = ''; }
+          } else if (type.includes('Dropdown') || type.includes('OptionList')) {
+            fieldType = type.includes('Dropdown') ? 'combobox' : 'listbox';
+            try { 
+              options = field.getOptions() || [];
+              value = field.getSelected()?.[0] || '';
+            } catch { options = []; }
+          } else if (type.includes('Signature')) {
+            fieldType = 'signature';
+          } else {
+            fieldType = 'text';
+            try { value = field.getText() || ''; } catch { value = ''; }
+          }
+
+          fields.push({
+            id: `detected-${index}-${wIdx}-${Date.now()}`,
+            name: name || `Field_${index + 1}`,
+            type: fieldType,
+            page: pageIndex + 1,
+            x: rect.x,
+            y: rect.y,
+            width: rect.width || 120,
+            height: rect.height || 24,
+            value: value,
+            options: options,
+            readOnly: field.isReadOnly ? field.isReadOnly() : false,
+            required: field.isRequired ? field.isRequired() : false,
+            multiline: field.isMultiline ? field.isMultiline() : false,
+            isExisting: true,
+            fontSize: 11,
+            fontFamily: 'Helvetica',
+            color: '#000000',
+            strokeColor: '#000000',
+            isBold: false,
+            isItalic: false,
+            isUnderline: false
+          });
+        });
+      } catch (fErr) {
+        console.warn('Skipping unparseable form field:', fErr);
+      }
+    });
+  } catch (err) {
+    console.warn('AcroForm parsing fell back to standard view:', err);
+  }
+
+  return {
+    fields,
+    totalPages: pdfDoc.getPageCount()
+  };
+}
+
+/**
+ * Bake filled form data and create genuine, interactive, editable AcroForm widgets in the PDF.
+ * Handles interactive fields, static form text annotations, and field indicator pointer stamps.
+ */
+export async function savePdfForms(file, formFields) {
+  const isLocked = await checkPdfPassword(file);
+  if (isLocked) {
+    const err = new Error(`"${file.name}" is password-protected.`);
+    err.lockedFiles = [file.name];
+    throw err;
+  }
+
+  const arrayBuffer = await file.arrayBuffer();
+  const pdfDoc = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
+  const form = pdfDoc.getForm();
+
+  const fonts = {
+    Helvetica: await pdfDoc.embedFont(StandardFonts.Helvetica),
+    HelveticaBold: await pdfDoc.embedFont(StandardFonts.HelveticaBold),
+    Times: await pdfDoc.embedFont(StandardFonts.TimesRoman),
+    TimesBold: await pdfDoc.embedFont(StandardFonts.TimesRomanBold),
+    Courier: await pdfDoc.embedFont(StandardFonts.Courier),
+    CourierBold: await pdfDoc.embedFont(StandardFonts.CourierBold),
+  };
+
+  const pages = pdfDoc.getPages();
+
+  for (let i = 0; i < formFields.length; i++) {
+    const field = formFields[i];
+    const targetPage = pages[Math.max(0, Math.min(field.page - 1, pages.length - 1))];
+    const { width: pageWidth, height: pageHeight } = targetPage.getSize();
+
+    const pdfX = (field.xPercent / 100) * pageWidth;
+    const pdfWidth = (field.widthPercent / 100) * pageWidth;
+    const pdfHeight = (field.heightPercent / 100) * pageHeight;
+    const pdfY = pageHeight - ((field.yPercent / 100) * pageHeight) - pdfHeight;
+
+    let fontRef = fonts.Helvetica;
+    if (field.fontFamily === 'Times') fontRef = field.isBold ? fonts.TimesBold : fonts.Times;
+    else if (field.fontFamily === 'Courier') fontRef = field.isBold ? fonts.CourierBold : fonts.Courier;
+    else if (field.isBold) fontRef = fonts.HelveticaBold;
+
+    const targetFontSize = Math.max(7, Math.min(field.fontSize || 11, Math.round(pdfHeight * 0.75)));
+
+    const hex = (field.color || '#000000').replace('#', '');
+    const r = parseInt(hex.substring(0, 2), 16) / 255 || 0;
+    const g = parseInt(hex.substring(2, 4), 16) / 255 || 0;
+    const b = parseInt(hex.substring(4, 6), 16) / 255 || 0;
+    const textColor = rgb(r, g, b);
+
+    // 1. Static Form Text (Pure text annotation, not an interactive widget)
+    if (field.type === 'formtext') {
+      if (field.value) {
+        targetPage.drawText(String(field.value), {
+          x: pdfX,
+          y: pdfY + (pdfHeight / 2) - (targetFontSize / 2.5),
+          size: targetFontSize,
+          font: fontRef,
+          color: textColor,
+          maxWidth: pdfWidth
+        });
+
+        if (field.isUnderline) {
+          const textW = fontRef.widthOfTextAtSize(String(field.value), targetFontSize);
+          targetPage.drawLine({
+            start: { x: pdfX, y: pdfY + (pdfHeight / 2) - (targetFontSize / 2.5) - 2 },
+            end: { x: pdfX + Math.min(textW, pdfWidth), y: pdfY + (pdfHeight / 2) - (targetFontSize / 2.5) - 2 },
+            thickness: 1,
+            color: textColor
+          });
+        }
+      }
+      continue;
+    }
+
+    // 2. Field Indicator Stamp (When enabled on an interactive widget)
+    if (field.includeIndicator && field.type !== 'formtext') {
+      const indLabel = field.indicatorText || 'Sign Here';
+      const indFontSize = 8;
+      const indPadding = 4;
+      const indTextW = fonts.HelveticaBold.widthOfTextAtSize(indLabel, indFontSize);
+      const indBadgeW = indTextW + indPadding * 2;
+      const indBadgeH = 14;
+      const indX = Math.max(4, pdfX - indBadgeW - 8);
+      const indY = pdfY + (pdfHeight / 2) - (indBadgeH / 2);
+
+      targetPage.drawRectangle({
+        x: indX,
+        y: indY,
+        width: indBadgeW,
+        height: indBadgeH,
+        color: rgb(0.05, 0.55, 0.9),
+      });
+
+      targetPage.drawText(indLabel, {
+        x: indX + indPadding,
+        y: indY + 3.5,
+        size: indFontSize,
+        font: fonts.HelveticaBold,
+        color: rgb(1, 1, 1),
+      });
+    }
+
+    // 3. Interactive AcroForm Widgets
+    const fieldName = (field.name && field.name.trim())
+      ? `${field.name.trim().replace(/[^a-zA-Z0-9_-]/g, '_')}_${i}`
+      : `FormField_${i}_${Date.now()}`;
+
+    try {
+      if (field.type === 'checkbox') {
+        let checkBox;
+        try {
+          checkBox = form.createCheckBox(fieldName);
+        } catch {
+          checkBox = form.createCheckBox(`${fieldName}_${Math.random().toString(36).substring(2, 6)}`);
+        }
+        checkBox.addToPage(targetPage, {
+          x: pdfX,
+          y: pdfY,
+          width: pdfWidth,
+          height: pdfHeight,
+        });
+
+        if (field.value) checkBox.check();
+        else checkBox.uncheck();
+
+        if (field.readOnly) checkBox.enableReadOnly();
+        if (field.required) checkBox.enableRequired();
+      } else if (field.type === 'radio') {
+        const groupName = field.group || `RadioGroup_${field.page}_${i}`;
+        let radioGroup;
+        try {
+          radioGroup = form.getRadioGroup(groupName);
+        } catch {
+          radioGroup = form.createRadioGroup(groupName);
+        }
+
+        const optionValue = field.name || `Option_${i}`;
+        radioGroup.addOptionToPage(optionValue, targetPage, {
+          x: pdfX,
+          y: pdfY,
+          width: pdfWidth,
+          height: pdfHeight,
+        });
+
+        if (field.value) radioGroup.select(optionValue);
+        if (field.readOnly) radioGroup.enableReadOnly();
+        if (field.required) radioGroup.enableRequired();
+      } else if (field.type === 'combobox') {
+        let dropdown;
+        try {
+          dropdown = form.createDropdown(fieldName);
+        } catch {
+          dropdown = form.createDropdown(`${fieldName}_${Math.random().toString(36).substring(2, 6)}`);
+        }
+        dropdown.addToPage(targetPage, {
+          x: pdfX,
+          y: pdfY,
+          width: pdfWidth,
+          height: pdfHeight,
+        });
+
+        try { dropdown.setFontSize(targetFontSize); } catch (_) {}
+
+        const optionsList = (field.options && field.options.length > 0)
+          ? field.options
+          : ['Option 1', 'Option 2', 'Option 3'];
+        
+        dropdown.setOptions(optionsList);
+
+        if (field.value && optionsList.includes(field.value)) {
+          dropdown.select(field.value);
+        } else if (optionsList.length > 0) {
+          dropdown.select(optionsList[0]);
+        }
+
+        dropdown.updateAppearances(fontRef);
+        if (field.readOnly) dropdown.enableReadOnly();
+        if (field.required) dropdown.enableRequired();
+      } else if (field.type === 'listbox') {
+        let optionList;
+        try {
+          optionList = form.createOptionList(fieldName);
+        } catch {
+          optionList = form.createOptionList(`${fieldName}_${Math.random().toString(36).substring(2, 6)}`);
+        }
+        optionList.addToPage(targetPage, {
+          x: pdfX,
+          y: pdfY,
+          width: pdfWidth,
+          height: pdfHeight,
+        });
+
+        try { optionList.setFontSize(Math.max(6, targetFontSize - 1)); } catch (_) {}
+
+        const optionsList = (field.options && field.options.length > 0)
+          ? field.options
+          : ['Option 1', 'Option 2', 'Option 3'];
+        
+        optionList.setOptions(optionsList);
+
+        if (field.value && optionsList.includes(field.value)) {
+          optionList.select(field.value);
+        }
+
+        optionList.updateAppearances(fontRef);
+        if (field.readOnly) optionList.enableReadOnly();
+        if (field.required) optionList.enableRequired();
+      } else if (field.type === 'signature') {
+        let tf;
+        try {
+          tf = form.createTextField(fieldName);
+        } catch {
+          tf = form.createTextField(`${fieldName}_${Math.random().toString(36).substring(2, 6)}`);
+        }
+        tf.addToPage(targetPage, {
+          x: pdfX,
+          y: pdfY,
+          width: pdfWidth,
+          height: pdfHeight,
+        });
+
+        try { tf.setFontSize(Math.max(9, targetFontSize)); } catch (_) {}
+
+        if (field.value) tf.setText(String(field.value));
+        tf.updateAppearances(fonts.TimesBold);
+        if (field.readOnly) tf.enableReadOnly();
+      } else {
+        let tf;
+        try {
+          tf = form.createTextField(fieldName);
+        } catch {
+          tf = form.createTextField(`${fieldName}_${Math.random().toString(36).substring(2, 6)}`);
+        }
+        tf.addToPage(targetPage, {
+          x: pdfX,
+          y: pdfY,
+          width: pdfWidth,
+          height: pdfHeight,
+        });
+
+        if (field.multiline) {
+          tf.enableMultiline();
+        }
+
+        try {
+          tf.setFontSize(targetFontSize);
+        } catch (_) {}
+
+        if (field.value) {
+          tf.setText(String(field.value));
+        }
+
+        tf.updateAppearances(fontRef);
+
+        if (field.readOnly) tf.enableReadOnly();
+        if (field.required) tf.enableRequired();
+      }
+    } catch (createErr) {
+      console.warn(`Fallback for field "${fieldName}":`, createErr);
+      if (field.value) {
+        targetPage.drawText(String(field.value), {
+          x: pdfX + 2,
+          y: pdfY + (pdfHeight / 2) - (targetFontSize / 2.5),
+          size: targetFontSize,
+          font: fontRef,
+          color: textColor,
+          maxWidth: pdfWidth - 4
+        });
+      }
+    }
+  }
+
+  const pdfBytes = await pdfDoc.save({ useObjectStreams: true });
+  return {
+    blob: new Blob([pdfBytes], { type: 'application/pdf' }),
+    filename: `filled_${file.name}`,
+    originalSize: file.size,
+    compressedSize: pdfBytes.byteLength
+  };
+}

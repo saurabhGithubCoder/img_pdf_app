@@ -42,7 +42,14 @@ import {
   ZoomIn,
   ZoomOut,
   Maximize,
-  Settings
+  Settings,
+  Pen,
+  SquareCheck,
+  CircleDot,
+  ListOrdered,
+  ChevronDown as ChevronDownIcon,
+  AlignLeft,
+  Move
 } from 'lucide-react';
 import {
   mergePDFs,
@@ -72,7 +79,9 @@ import {
   checkPdfPassword,
   checkDocxPassword,
   checkPptxPassword,
-  checkExcelPassword
+  checkExcelPassword,
+  extractPdfFormFields,
+  savePdfForms
 } from '../utils/pdfWorker';
 
 export default function ToolStudio({ tool, initialFiles, initialImageCards, initialHtmlCode, initialHtmlMode, onBack }) {
@@ -87,35 +96,36 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
 
   const changeFileInputRef = useRef(null);
 
-  // Compression tool settings
-  const [compressionPercent, setCompressionPercent] = useState(45);
+  function getFileInputAccept() {
+    if (tool?.id === 'jpg-to-pdf') return 'image/jpeg,image/png,image/webp';
+    if (tool?.id === 'word-to-pdf') return '.docx,.doc,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword';
+    if (tool?.id === 'powerpoint-to-pdf') return '.pptx,.ppt,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.ms-powerpoint';
+    if (tool?.id === 'excel-to-pdf') return '.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel';
+    if (tool?.id === 'html-to-pdf') return '.html,.htm,text/html';
+    return 'application/pdf';
+  }
 
-  // Password Protection State
+  const [compressionPercent, setCompressionPercent] = useState(45);
   const [protectPassword, setProtectPassword] = useState('');
   const [repeatPassword, setRepeatPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [showRepeatPassword, setShowRepeatPassword] = useState(false);
-
-  // Unlock PDF Options State
   const [unlockMode, setUnlockMode] = useState('without-password');
   const [unlockPassword, setUnlockPassword] = useState('');
   const [showUnlockPassword, setShowUnlockPassword] = useState(false);
-
-  // Merge PDF visual thumbnail cards & drag state
   const [mergeCards, setMergeCards] = useState([]);
   const [draggedMergeIndex, setDraggedMergeIndex] = useState(null);
   const [isLoadingMergePreviews, setIsLoadingMergePreviews] = useState(false);
 
-  // Page-selector & Visual tools
   const isPageLevelTool =
-    tool.id === 'remove' ||
-    tool.id === 'extract' ||
-    tool.id === 'organize' ||
-    tool.id === 'rotate' ||
-    tool.id === 'page-numbers' ||
-    tool.id === 'watermark' ||
-    tool.id === 'protect' ||
-    tool.id === 'crop';
+    tool?.id === 'remove' ||
+    tool?.id === 'extract' ||
+    tool?.id === 'organize' ||
+    tool?.id === 'rotate' ||
+    tool?.id === 'page-numbers' ||
+    tool?.id === 'watermark' ||
+    tool?.id === 'protect' ||
+    tool?.id === 'crop';
 
   const [thumbnails, setThumbnails] = useState([]);
   const [totalPages, setTotalPages] = useState(0);
@@ -125,7 +135,6 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
   const [draggedPageIndex, setDraggedPageIndex] = useState(null);
   const [draggedImageIndex, setDraggedImageIndex] = useState(null);
 
-  // Image to PDF Options State
   const [imageToPdfOptions, setImageToPdfOptions] = useState({
     orientation: 'portrait',
     pageSize: 'a4',
@@ -133,7 +142,6 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
     mergeAll: true,
   });
 
-  // Add Page Numbers Options State
   const [pageNumberOptions, setPageNumberOptions] = useState({
     pageMode: 'single',
     position: 'top-right',
@@ -151,7 +159,6 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
     color: '#334155'
   });
 
-  // Add Watermark Options State
   const [watermarkOptions, setWatermarkOptions] = useState({
     type: 'text',
     text: 'CONFIDENTIAL',
@@ -172,12 +179,11 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
     color: '#E11D48'
   });
 
-  // Crop PDF Tool State
-  const [cropPageMode, setCropPageMode] = useState('custom'); // 'custom' | 'all' | 'current'
+  const [cropPageMode, setCropPageMode] = useState('custom');
   const [cropCurrentPage, setCropCurrentPage] = useState(1);
   const [cropZoom, setCropZoom] = useState(68);
   const [cropPageDataUrl, setCropPageDataUrl] = useState('');
-  const [pageCropBoxes, setPageCropBoxes] = useState({}); // { 1: {x, y, w, h}, 2: {x, y, w, h} }
+  const [pageCropBoxes, setPageCropBoxes] = useState({});
   const DEFAULT_CROP_BOX = { x: 5, y: 5, width: 90, height: 90 };
   const cropCanvasContainerRef = useRef(null);
   const cropDragState = useRef({
@@ -206,7 +212,6 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
       const nextBox = typeof updater === 'function' ? updater(currentBox) : updater;
       
       if (cropPageMode === 'all') {
-        // If mode is 'all', sync across all loaded pages
         const updatedAll = {};
         for (let i = 1; i <= totalPages; i++) {
           updatedAll[i] = { ...nextBox };
@@ -221,7 +226,6 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
     });
   };
 
-  // Helper to extract clientX and clientY from either Mouse or Touch event
   const getPointerPos = (e) => {
     if (e.touches && e.touches.length > 0) {
       return { clientX: e.touches[0].clientX, clientY: e.touches[0].clientY };
@@ -229,10 +233,8 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
     return { clientX: e.clientX, clientY: e.clientY };
   };
 
-  // Crop Drag & Resize Handlers (Unified Mouse + Touch for Mobile)
   const handleCropPointerDown = (e, handle = null) => {
     e.stopPropagation();
-    // Allow preventDefault only if cancelable to avoid touch-scroll conflict
     if (e.cancelable) e.preventDefault();
 
     const { clientX, clientY } = getPointerPos(e);
@@ -299,17 +301,267 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
     window.removeEventListener('touchend', handleCropPointerUp);
   };
 
+  // PDF Forms Tool State
+  const [formMode, setFormMode] = useState('fill');
+  const [activeFormTool, setActiveFormTool] = useState(null);
+  const [formFields, setFormFields] = useState([]);
+  const [selectedFieldId, setSelectedFieldId] = useState(null);
+  const [formZoom, setFormZoom] = useState(100);
+  const [formPageDataUrl, setFormPageDataUrl] = useState('');
+  const [formCurrentPage, setFormCurrentPage] = useState(1);
+  const [formTotalPages, setFormTotalPages] = useState(1);
+  const [isFormLoading, setIsFormLoading] = useState(false);
+
+  const [formPageDimensions, setFormPageDimensions] = useState({ width: 595, height: 842 });
+  const [formViewportSize, setFormViewportSize] = useState({ width: 800, height: 600 });
+
+  const formPageContainerRef = useRef(null);
+  const formViewportScrollRef = useRef(null);
+  const formFieldDragRef = useRef({ isDragging: false, isResizing: false, handle: null, fieldId: null, startX: 0, startY: 0, initialPercent: null });
+
+  useEffect(() => {
+    if (!formViewportScrollRef.current) return;
+    const observer = new ResizeObserver((entries) => {
+      for (let entry of entries) {
+        const { width, height } = entry.contentRect;
+        if (width > 0 && height > 0) {
+          setFormViewportSize({ width, height });
+        }
+      }
+    });
+    observer.observe(formViewportScrollRef.current);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (tool?.id === 'forms' && files.length > 0) {
+      loadInitialPdfForms(files[0]);
+    }
+  }, [files, tool?.id]);
+
+  useEffect(() => {
+    if (tool?.id === 'forms' && files.length > 0) {
+      renderCurrentFormPage(files[0], formCurrentPage);
+      if (formViewportScrollRef.current) {
+        formViewportScrollRef.current.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+      }
+    }
+  }, [files, tool?.id, formCurrentPage]);
+
+  const loadInitialPdfForms = async (file) => {
+    setIsFormLoading(true);
+    setErrorMsg('');
+    try {
+      const data = await extractPdfFormFields(file);
+      setFormFields(data.fields || []);
+      setFormTotalPages(data.totalPages || 1);
+    } catch (err) {
+      setErrorMsg(err.message || 'Failed to analyze PDF form.');
+    } finally {
+      setIsFormLoading(false);
+    }
+  };
+
+  const renderCurrentFormPage = async (file, pageNum) => {
+    try {
+      const data = await renderSinglePdfPage(file, pageNum, 1.8);
+      setFormPageDataUrl(data.dataUrl);
+      setFormTotalPages(data.totalPages);
+      if (data.width && data.height) {
+        setFormPageDimensions({ width: data.width, height: data.height });
+      }
+    } catch (err) {
+      setErrorMsg('Failed to render form page preview.');
+    }
+  };
+
+  const selectedField = formFields.find((f) => f.id === selectedFieldId);
+
+  const updateSelectedField = (patch) => {
+    if (!selectedFieldId) return;
+    setFormFields((prev) =>
+      prev.map((f) => (f.id === selectedFieldId ? { ...f, ...patch } : f))
+    );
+  };
+
+  const deleteSelectedField = (id) => {
+    setFormFields((prev) => prev.filter((f) => f.id !== id));
+    if (selectedFieldId === id) setSelectedFieldId(null);
+  };
+
+  const handleCanvasClickToAddField = (e) => {
+    if (formMode !== 'edit' || !activeFormTool || !formPageContainerRef.current) return;
+    if (e.target !== formPageContainerRef.current && !e.target.classList.contains('form-page-img')) return;
+
+    const rect = formPageContainerRef.current.getBoundingClientRect();
+    const clickXPercent = Math.max(2, Math.min(85, ((e.clientX - rect.left) / rect.width) * 100));
+    const clickYPercent = Math.max(2, Math.min(90, ((e.clientY - rect.top) / rect.height) * 100));
+
+    let defaultWidthPercent = 24;
+    let defaultHeightPercent = 3.0;
+
+    if (activeFormTool === 'checkbox' || activeFormTool === 'radio') {
+      defaultWidthPercent = 3.5;
+      defaultHeightPercent = 2.2;
+    } else if (activeFormTool === 'signature') {
+      defaultWidthPercent = 22;
+      defaultHeightPercent = 4.5;
+    } else if (activeFormTool === 'listbox') {
+      defaultWidthPercent = 26;
+      defaultHeightPercent = 8.0;
+    } else if (activeFormTool === 'formtext') {
+      defaultWidthPercent = 20;
+      defaultHeightPercent = 2.6;
+    }
+
+    const isTextAnnotation = activeFormTool === 'formtext';
+
+    const newField = {
+      id: `field-${Date.now()}`,
+      name: isTextAnnotation
+        ? `TextLabel_${formFields.length + 1}`
+        : `${activeFormTool}_${formFields.length + 1}`,
+      type: activeFormTool,
+      page: formCurrentPage,
+      xPercent: clickXPercent,
+      yPercent: clickYPercent,
+      widthPercent: defaultWidthPercent,
+      heightPercent: defaultHeightPercent,
+      value: isTextAnnotation
+        ? 'Insert text here'
+        : activeFormTool === 'checkbox' || activeFormTool === 'radio'
+        ? false
+        : '',
+      options: activeFormTool === 'combobox' || activeFormTool === 'listbox' ? ['Option 1', 'Option 2', 'Option 3'] : [],
+      readOnly: false,
+      required: false,
+      multiline: false,
+      includeIndicator: activeFormTool === 'signature',
+      indicatorText: activeFormTool === 'signature' ? 'Sign Here' : 'Fill Here',
+      fontSize: 11,
+      fontFamily: 'Helvetica',
+      color: isTextAnnotation ? '#DC2626' : '#000000',
+      strokeColor: '#3b82f6',
+      isBold: false,
+      isItalic: false,
+      isUnderline: false,
+    };
+
+    setFormFields((prev) => [...prev, newField]);
+    setSelectedFieldId(newField.id);
+  };
+
+  const handleFieldPointerDown = (e, field, handle = null, isExplicitDragHandle = false) => {
+    setSelectedFieldId(field.id);
+
+    if (formMode === 'fill' && !isExplicitDragHandle && !handle) {
+      return;
+    }
+
+    e.stopPropagation();
+    if (e.cancelable) e.preventDefault();
+
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+
+    formFieldDragRef.current = {
+      isDragging: !handle,
+      isResizing: Boolean(handle),
+      handle,
+      fieldId: field.id,
+      startX: clientX,
+      startY: clientY,
+      initialPercent: {
+        x: field.xPercent,
+        y: field.yPercent,
+        w: field.widthPercent,
+        h: field.heightPercent
+      }
+    };
+
+    window.addEventListener('mousemove', handleFieldPointerMove, { passive: false });
+    window.addEventListener('mouseup', handleFieldPointerUp);
+    window.addEventListener('touchmove', handleFieldPointerMove, { passive: false });
+    window.addEventListener('touchend', handleFieldPointerUp);
+  };
+
+  const handleFieldPointerMove = (e) => {
+    const { isDragging, isResizing, handle, fieldId, startX, startY, initialPercent } = formFieldDragRef.current;
+    if (!isDragging && !isResizing) return;
+    if (!formPageContainerRef.current) return;
+
+    if (e.cancelable) e.preventDefault();
+
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+
+    const rect = formPageContainerRef.current.getBoundingClientRect();
+    const deltaXPercent = ((clientX - startX) / rect.width) * 100;
+    const deltaYPercent = ((clientY - startY) / rect.height) * 100;
+
+    setFormFields((prev) =>
+      prev.map((f) => {
+        if (f.id !== fieldId) return f;
+        if (isDragging) {
+          const newX = Math.max(0, Math.min(100 - initialPercent.w, initialPercent.x + deltaXPercent));
+          const newY = Math.max(0, Math.min(100 - initialPercent.h, initialPercent.y + deltaYPercent));
+          return { ...f, xPercent: newX, yPercent: newY };
+        } else if (isResizing) {
+          let { x, y, w, h } = initialPercent;
+          if (handle.includes('e')) w = Math.max(2, Math.min(100 - x, w + deltaXPercent));
+          if (handle.includes('s')) h = Math.max(1.5, Math.min(100 - y, h + deltaYPercent));
+          if (handle.includes('w')) {
+            const potentialW = w - deltaXPercent;
+            if (potentialW >= 2 && x + deltaXPercent >= 0) {
+              x += deltaXPercent;
+              w = potentialW;
+            }
+          }
+          if (handle.includes('n')) {
+            const potentialH = h - deltaYPercent;
+            if (potentialH >= 1.5 && y + deltaYPercent >= 0) {
+              y += deltaYPercent;
+              h = potentialH;
+            }
+          }
+          return { ...f, xPercent: x, yPercent: y, widthPercent: w, heightPercent: h };
+        }
+        return f;
+      })
+    );
+  };
+
+  const handleFieldPointerUp = () => {
+    formFieldDragRef.current = { isDragging: false, isResizing: false, handle: null, fieldId: null };
+    window.removeEventListener('mousemove', handleFieldPointerMove);
+    window.removeEventListener('mouseup', handleFieldPointerUp);
+    window.removeEventListener('touchmove', handleFieldPointerMove);
+    window.removeEventListener('touchend', handleFieldPointerUp);
+  };
+
+  const availW = Math.max(100, formViewportSize.width - 48);
+  const availH = Math.max(100, formViewportSize.height - 48);
+  const pageW = formPageDimensions.width || 595;
+  const pageH = formPageDimensions.height || 842;
+  const baseScale = Math.min(availW / pageW, availH / pageH);
+  const zoomFactor = formZoom / 100;
+  const displayWidth = Math.round(pageW * baseScale * zoomFactor);
+  const displayHeight = Math.round(pageH * baseScale * zoomFactor);
+
+  const isOverflowingY = displayHeight > availH;
+  const isOverflowingX = displayWidth > availW;
+
   useEffect(() => {
     if (isPageLevelTool && files.length > 0) {
-      if (tool.id === 'crop') {
+      if (tool?.id === 'crop') {
         loadCropPagePreview(files[0], cropCurrentPage);
       } else {
         loadDocumentThumbnails(files[0]);
       }
-    } else if (tool.id === 'merge' && files.length > 0) {
+    } else if (tool?.id === 'merge' && files.length > 0) {
       loadMergePreviews(files);
     }
-  }, [files, tool.id, cropCurrentPage]);
+  }, [files, tool?.id, cropCurrentPage]);
 
   const loadCropPagePreview = async (file, pageNum) => {
     setErrorMsg('');
@@ -384,15 +636,6 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
     }
   };
 
-  const getFileInputAccept = () => {
-    if (tool.id === 'jpg-to-pdf') return 'image/jpeg,image/png,image/webp';
-    if (tool.id === 'word-to-pdf') return '.docx,.doc,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword';
-    if (tool.id === 'powerpoint-to-pdf') return '.pptx,.ppt,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.ms-powerpoint';
-    if (tool.id === 'excel-to-pdf') return '.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel';
-    if (tool.id === 'html-to-pdf') return '.html,.htm,text/html';
-    return 'application/pdf';
-  };
-
   const handleReplaceDocument = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -401,20 +644,20 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
     let isLocked = false;
     if (file.name.toLowerCase().endsWith('.pdf') || file.type === 'application/pdf') {
       isLocked = await checkPdfPassword(file);
-    } else if (tool.id === 'word-to-pdf') {
+    } else if (tool?.id === 'word-to-pdf') {
       isLocked = await checkDocxPassword(file);
-    } else if (tool.id === 'powerpoint-to-pdf') {
+    } else if (tool?.id === 'powerpoint-to-pdf') {
       isLocked = await checkPptxPassword(file);
-    } else if (tool.id === 'excel-to-pdf') {
+    } else if (tool?.id === 'excel-to-pdf') {
       isLocked = await checkExcelPassword(file);
     }
 
-    if (tool.id === 'protect' && isLocked) {
+    if (tool?.id === 'protect' && isLocked) {
       setErrorMsg(`"${file.name}" is already password-protected.`);
       return;
     }
 
-    if (tool.id !== 'unlock' && isLocked) {
+    if (tool?.id !== 'unlock' && isLocked) {
       setErrorMsg(`Cannot process: "${file.name}" is password-protected or encrypted.`);
       return;
     }
@@ -636,74 +879,15 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  // Crop Drag & Resize Handlers
-  const handleCropMouseDown = (e, handle = null) => {
-    e.stopPropagation();
-    e.preventDefault();
-    cropDragState.current = {
-      isDragging: !handle,
-      isResizing: Boolean(handle),
-      handle,
-      startX: e.clientX,
-      startY: e.clientY,
-      initialBox: { ...currentActiveBox }
-    };
-
-    window.addEventListener('mousemove', handleCropMouseMove);
-    window.addEventListener('mouseup', handleCropMouseUp);
-  };
-
-  const handleCropMouseMove = (e) => {
-    const { isDragging, isResizing, handle, startX, startY, initialBox } = cropDragState.current;
-    if (!isDragging && !isResizing) return;
-    if (!cropCanvasContainerRef.current) return;
-
-    const rect = cropCanvasContainerRef.current.getBoundingClientRect();
-    const deltaXPercent = ((e.clientX - startX) / rect.width) * 100;
-    const deltaYPercent = ((e.clientY - startY) / rect.height) * 100;
-
-    if (isDragging) {
-      const newX = Math.max(0, Math.min(100 - initialBox.width, initialBox.x + deltaXPercent));
-      const newY = Math.max(0, Math.min(100 - initialBox.height, initialBox.y + deltaYPercent));
-      updateCurrentPageCropBox((prev) => ({ ...prev, x: newX, y: newY }));
-    } else if (isResizing) {
-      let { x, y, width, height } = initialBox;
-
-      if (handle.includes('e')) width = Math.max(5, Math.min(100 - x, width + deltaXPercent));
-      if (handle.includes('s')) height = Math.max(5, Math.min(100 - y, height + deltaYPercent));
-      if (handle.includes('w')) {
-        const potentialWidth = width - deltaXPercent;
-        if (potentialWidth >= 5 && x + deltaXPercent >= 0) {
-          x += deltaXPercent;
-          width = potentialWidth;
-        }
-      }
-      if (handle.includes('n')) {
-        const potentialHeight = height - deltaYPercent;
-        if (potentialHeight >= 5 && y + deltaYPercent >= 0) {
-          y += deltaYPercent;
-          height = potentialHeight;
-        }
-      }
-      updateCurrentPageCropBox({ x, y, width, height });
-    }
-  };
-
-  const handleCropMouseUp = () => {
-    cropDragState.current = { isDragging: false, isResizing: false, handle: null, startX: 0, startY: 0, initialBox: null };
-    window.removeEventListener('mousemove', handleCropMouseMove);
-    window.removeEventListener('mouseup', handleCropMouseUp);
-  };
-
   const executeAction = async () => {
     setErrorMsg('');
 
-    if (tool.id === 'merge' && files.length < 2) {
+    if (tool?.id === 'merge' && files.length < 2) {
       setErrorMsg('Merge PDF requires at least 2 PDF files. Please click "+ Add More Files" to proceed.');
       return;
     }
 
-    if (tool.id === 'protect') {
+    if (tool?.id === 'protect') {
       if (!protectPassword) {
         setErrorMsg('Please type a password to protect your PDF.');
         return;
@@ -714,12 +898,12 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
       }
     }
 
-    if (tool.id === 'unlock' && unlockMode === 'with-password' && !unlockPassword) {
+    if (tool?.id === 'unlock' && unlockMode === 'with-password' && !unlockPassword) {
       setErrorMsg('Please enter the password to unlock this document.');
       return;
     }
 
-    if (tool.id === 'watermark' && watermarkOptions.type === 'image' && !watermarkOptions.imageFile) {
+    if (tool?.id === 'watermark' && watermarkOptions.type === 'image' && !watermarkOptions.imageFile) {
       setErrorMsg('Please select an image file to use as the watermark.');
       return;
     }
@@ -728,7 +912,10 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
 
     try {
       let output;
-      switch (tool.id) {
+      switch (tool?.id) {
+        case 'forms':
+          output = await savePdfForms(files[0], formFields);
+          break;
         case 'crop':
           output = await cropPDF(files[0], {
             pagesMode: cropPageMode,
@@ -801,7 +988,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
           output = await pdfToMarkdown(files[0]);
           break;
         default:
-          output = { blob: files[0], filename: `processed_${files[0].name}` };
+          output = { blob: files[0], filename: `processed_${files[0]?.name || 'doc.pdf'}` };
       }
 
       const url = URL.createObjectURL(output.blob);
@@ -848,25 +1035,25 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
     let borderColor = 'border-blue-200';
     let bgGradient = 'from-blue-50/50 to-slate-50';
 
-    if (tool.id === 'powerpoint-to-pdf') {
+    if (tool?.id === 'powerpoint-to-pdf') {
       IconComp = Presentation;
       badgeText = 'PPT';
       badgeColor = 'bg-orange-600 text-white';
       borderColor = 'border-orange-200';
       bgGradient = 'from-orange-50/50 to-slate-50';
-    } else if (tool.id === 'excel-to-pdf') {
+    } else if (tool?.id === 'excel-to-pdf') {
       IconComp = Sheet;
       badgeText = 'XLS';
       badgeColor = 'bg-emerald-600 text-white';
       borderColor = 'border-emerald-200';
       bgGradient = 'from-emerald-50/50 to-slate-50';
-    } else if (tool.id === 'html-to-pdf') {
+    } else if (tool?.id === 'html-to-pdf') {
       IconComp = FileCode;
       badgeText = 'HTML';
       badgeColor = 'bg-amber-600 text-white';
       borderColor = 'border-amber-200';
       bgGradient = 'from-amber-50/50 to-slate-50';
-    } else if (tool.id === 'to-markdown') {
+    } else if (tool?.id === 'to-markdown') {
       IconComp = FileText;
       badgeText = 'MD';
       badgeColor = 'bg-blue-600 text-white';
@@ -913,8 +1100,10 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
     );
   };
 
+  const isFormsStudio = tool?.id === 'forms' && !result;
+
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-800 pb-20">
+    <div className={`bg-slate-50 text-slate-800 ${isFormsStudio ? 'h-screen overflow-hidden flex flex-col' : 'min-h-screen pb-20'}`}>
       <input
         type="file"
         ref={changeFileInputRef}
@@ -923,8 +1112,8 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
         onChange={handleReplaceDocument}
       />
 
-      <header className="sticky top-0 z-30 bg-white/90 backdrop-blur-md border-b border-slate-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+      <header className="sticky top-0 z-30 bg-white/90 backdrop-blur-md border-b border-slate-200 shrink-0">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-14 sm:h-16 flex items-center justify-between">
           <button
             onClick={onBack}
             className="flex items-center space-x-2 text-slate-600 hover:text-slate-900 font-semibold text-sm px-3 py-1.5 rounded-xl hover:bg-slate-100 transition cursor-pointer"
@@ -934,30 +1123,691 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
           </button>
 
           <div className="flex items-center space-x-3">
-            <div className={`w-8 h-8 rounded-lg ${tool.bg} ${tool.color} flex items-center justify-center`}>
-              <tool.icon className="w-4 h-4" />
+            <div className={`w-8 h-8 rounded-lg ${tool?.bg} ${tool?.color} flex items-center justify-center`}>
+              {tool && <tool.icon className="w-4 h-4" />}
             </div>
-            <h2 className="text-base font-bold text-slate-900">{tool.name} Workspace</h2>
+            <h2 className="text-base font-bold text-slate-900">{tool?.name} Workspace</h2>
           </div>
 
           <div className="w-24" />
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6">
+      <main className={`max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 ${isFormsStudio ? 'flex-1 overflow-hidden py-3 flex flex-col' : 'pt-6'}`}>
         {errorMsg && (
-          <div className="mb-6 p-4 bg-rose-50 border border-rose-200 rounded-2xl text-xs text-rose-800 flex items-start space-x-2.5">
+          <div className="mb-4 p-3.5 bg-rose-50 border border-rose-200 rounded-2xl text-xs text-rose-800 flex items-start space-x-2.5 shrink-0">
             <Info className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
             <p className="flex-1 font-medium">{errorMsg}</p>
           </div>
         )}
 
         {!result ? (
-          <div className="space-y-6">
-            {/* 0. Crop PDF Studio (Interactive Visual Workspace) */}
-            {tool.id === 'crop' && (
+          <div className={`${isFormsStudio ? 'flex-1 min-h-0 flex flex-col' : 'space-y-6'}`}>
+            {/* PDF Forms Studio */}
+            {tool?.id === 'forms' && (
+              <div className="flex-1 min-h-0 flex flex-col space-y-3">
+                {/* Top Control Bar with 2 unnecessary buttons removed */}
+                <div className="bg-white border border-slate-200 rounded-2xl px-3 py-2 flex flex-wrap items-center justify-between gap-2 shadow-xs shrink-0">
+                  <div className="flex items-center space-x-1.5 p-1 bg-slate-100 rounded-xl">
+                    <button
+                      type="button"
+                      onClick={() => { setFormMode('fill'); setActiveFormTool(null); }}
+                      className={`px-3 py-1 rounded-lg text-xs font-bold flex items-center space-x-1.5 transition cursor-pointer ${
+                        formMode === 'fill' ? 'bg-slate-800 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      <Pen className="w-3.5 h-3.5" />
+                      <span>Fill Form</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setFormMode('edit'); if (!activeFormTool) setActiveFormTool('text'); }}
+                      className={`px-3 py-1 rounded-lg text-xs font-bold flex items-center space-x-1.5 transition cursor-pointer ${
+                        formMode === 'edit' ? 'bg-slate-800 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      <Sliders className="w-3.5 h-3.5" />
+                      <span>Edit Form</span>
+                    </button>
+                  </div>
+
+                  {formMode === 'edit' && (
+                    <div className="flex items-center space-x-1 border-x border-slate-200 px-2 overflow-x-auto">
+                      {[
+                        { id: 'signature', label: 'Signature', icon: Pen },
+                        { id: 'freetext', label: 'Interactive Text Field', icon: Type },
+                        { id: 'formtext', label: 'Static Form Text', icon: AlignLeft, color: 'text-red-500' },
+                        { id: 'checkbox', label: 'Checkbox', icon: SquareCheck },
+                        { id: 'radio', label: 'Radio Button', icon: CircleDot },
+                        { id: 'listbox', label: 'List Box', icon: ListOrdered },
+                        { id: 'combobox', label: 'Combo Box', icon: ChevronDownIcon },
+                      ].map((t) => {
+                        const IconComp = t.icon;
+                        const isActive = activeFormTool === t.id;
+                        return (
+                          <button
+                            key={t.id}
+                            type="button"
+                            onClick={() => { setActiveFormTool(t.id); }}
+                            title={t.label}
+                            className={`p-1.5 rounded-lg transition cursor-pointer flex items-center justify-center ${
+                              isActive ? 'bg-blue-50 border border-blue-500 text-blue-600 shadow-xs' : 'text-slate-600 hover:bg-slate-100'
+                            }`}
+                          >
+                            <IconComp className={`w-4 h-4 ${t.color || ''}`} />
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  <div className="text-xs font-semibold text-slate-500 truncate max-w-[160px]">
+                    {files[0]?.name}
+                  </div>
+                </div>
+
+                {/* Main Workspace */}
+                <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-12 gap-4 items-stretch">
+                  <div className="lg:col-span-8 bg-slate-100 rounded-3xl border border-slate-200 flex flex-col relative overflow-hidden h-full min-h-0 shadow-inner">
+                    {isFormLoading ? (
+                      <div className="flex-1 flex flex-col items-center justify-center space-y-3 text-slate-400">
+                        <Loader2 className="w-9 h-9 animate-spin text-rose-500" />
+                        <p className="text-xs font-semibold">Parsing Form Fields & Rendering...</p>
+                      </div>
+                    ) : formPageDataUrl ? (
+                      <div className="flex-1 min-h-0 flex flex-col relative">
+                        <div
+                          ref={formViewportScrollRef}
+                          className="flex-1 min-h-0 w-full overflow-auto p-4"
+                        >
+                          <div
+                            style={{
+                              minWidth: '100%',
+                              minHeight: '100%',
+                              display: 'flex',
+                              alignItems: isOverflowingY ? 'flex-start' : 'center',
+                              justifyContent: isOverflowingX ? 'flex-start' : 'center',
+                              padding: '12px',
+                              boxSizing: 'border-box'
+                            }}
+                          >
+                            <div
+                              ref={formPageContainerRef}
+                              onClick={handleCanvasClickToAddField}
+                              style={{
+                                width: `${displayWidth}px`,
+                                height: `${displayHeight}px`,
+                                position: 'relative',
+                                flexShrink: 0,
+                              }}
+                              className={`bg-white shadow-2xl rounded-md transition-all duration-75 select-none overflow-hidden touch-none ${
+                                formMode === 'edit' && activeFormTool ? 'cursor-crosshair' : 'cursor-default'
+                              }`}
+                            >
+                              <img
+                                src={formPageDataUrl}
+                                alt={`Page ${formCurrentPage}`}
+                                className="w-full h-full block pointer-events-none select-none form-page-img"
+                                draggable={false}
+                              />
+
+                              {/* Form Field Elements */}
+                              {formFields
+                                .filter((f) => f.page === formCurrentPage)
+                                .map((field) => {
+                                  const isSelected = selectedFieldId === field.id;
+                                  const dynamicFontSize = Math.max(8, Math.round((field.fontSize || 11) * (displayWidth / pageW)));
+
+                                  return (
+                                    <div
+                                      key={field.id}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setSelectedFieldId(field.id);
+                                      }}
+                                      onMouseDown={(e) => handleFieldPointerDown(e, field)}
+                                      onTouchStart={(e) => handleFieldPointerDown(e, field)}
+                                      style={{
+                                        left: `${field.xPercent}%`,
+                                        top: `${field.yPercent}%`,
+                                        width: `${field.widthPercent}%`,
+                                        height: `${field.heightPercent}%`,
+                                      }}
+                                      className={`group absolute flex items-center justify-center transition-all ${
+                                        field.type === 'formtext'
+                                          ? isSelected
+                                            ? 'border border-dashed border-red-500 bg-red-50/20'
+                                            : 'border border-transparent hover:border-red-300'
+                                          : isSelected
+                                          ? 'border-2 border-blue-500 bg-blue-50/50 shadow-md z-30'
+                                          : 'border border-blue-300/80 bg-blue-50/20 hover:border-blue-400 z-20'
+                                      } ${formMode === 'edit' ? 'cursor-move' : 'cursor-pointer'}`}
+                                    >
+                                      {/* Left Arrow Field Indicator Badge */}
+                                      {field.includeIndicator && (
+                                        <div
+                                          className="absolute right-full mr-2.5 flex items-center pointer-events-none z-40 select-none drop-shadow-sm"
+                                          style={{ top: '50%', transform: 'translateY(-50%)' }}
+                                        >
+                                          <div className="px-2 py-1 bg-sky-500 text-white font-bold rounded-l-md text-[10px] whitespace-nowrap shadow-xs">
+                                            {field.indicatorText || 'Sign Here'}
+                                          </div>
+                                          <div className="w-0 h-0 border-y-[6px] border-y-transparent border-l-[6px] border-l-sky-500" />
+                                        </div>
+                                      )}
+
+                                      {/* Drag Reposition Handle on hover/select */}
+                                      <div
+                                        onMouseDown={(e) => handleFieldPointerDown(e, field, null, true)}
+                                        onTouchStart={(e) => handleFieldPointerDown(e, field, null, true)}
+                                        className={`absolute -top-3 -right-3 p-1 bg-blue-600 text-white rounded-full shadow cursor-grab active:cursor-grabbing z-40 transition-opacity ${
+                                          isSelected || formMode === 'edit' ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+                                        }`}
+                                        title="Drag to reposition"
+                                      >
+                                        <Move className="w-2.5 h-2.5" />
+                                      </div>
+
+                                      {/* Static Form Text */}
+                                      {field.type === 'formtext' ? (
+                                        <div
+                                          style={{
+                                            color: field.color || '#DC2626',
+                                            fontSize: `${dynamicFontSize}px`,
+                                            fontFamily: field.fontFamily || 'Helvetica',
+                                            fontWeight: field.isBold ? 'bold' : 'normal',
+                                            fontStyle: field.isItalic ? 'italic' : 'normal',
+                                            textDecoration: field.isUnderline ? 'underline' : 'none',
+                                          }}
+                                          className="w-full h-full px-1 flex items-center truncate select-none pointer-events-none"
+                                        >
+                                          {field.value || 'Insert text here'}
+                                        </div>
+                                      ) : field.type === 'checkbox' ? (
+                                        <input
+                                          type="checkbox"
+                                          checked={Boolean(field.value)}
+                                          disabled={field.readOnly}
+                                          onClick={(e) => e.stopPropagation()}
+                                          onChange={(e) => {
+                                            updateSelectedField({ value: e.target.checked });
+                                            setSelectedFieldId(field.id);
+                                          }}
+                                          className="w-4 h-4 accent-blue-600 cursor-pointer pointer-events-auto"
+                                        />
+                                      ) : field.type === 'radio' ? (
+                                        <input
+                                          type="radio"
+                                          checked={Boolean(field.value)}
+                                          disabled={field.readOnly}
+                                          onClick={(e) => e.stopPropagation()}
+                                          onChange={(e) => {
+                                            updateSelectedField({ value: e.target.checked });
+                                            setSelectedFieldId(field.id);
+                                          }}
+                                          className="w-4 h-4 accent-blue-600 cursor-pointer pointer-events-auto"
+                                        />
+                                      ) : field.type === 'signature' ? (
+                                        <div
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setSelectedFieldId(field.id);
+                                          }}
+                                          style={{ fontSize: `${dynamicFontSize}px` }}
+                                          className="w-full h-full px-2 flex items-center font-serif italic text-blue-900 truncate cursor-pointer pointer-events-auto"
+                                        >
+                                          {field.value || (
+                                            <span className="px-2 py-0.5 bg-blue-900 text-white rounded font-sans not-italic text-[11px] font-bold">
+                                              Sign here
+                                            </span>
+                                          )}
+                                        </div>
+                                      ) : field.type === 'combobox' ? (
+                                        <select
+                                          value={field.value}
+                                          disabled={field.readOnly}
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setSelectedFieldId(field.id);
+                                          }}
+                                          onChange={(e) => updateSelectedField({ value: e.target.value })}
+                                          style={{ fontSize: `${dynamicFontSize}px` }}
+                                          className="w-full h-full px-1 bg-transparent focus:outline-none pointer-events-auto cursor-pointer"
+                                        >
+                                          {field.options?.map((opt, i) => (
+                                            <option key={i} value={opt}>
+                                              {opt}
+                                            </option>
+                                          ))}
+                                        </select>
+                                      ) : field.type === 'listbox' ? (
+                                        <div
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setSelectedFieldId(field.id);
+                                          }}
+                                          style={{ fontSize: `${Math.max(8, dynamicFontSize - 1)}px` }}
+                                          className="w-full h-full overflow-y-auto p-1 bg-white/70 pointer-events-auto"
+                                        >
+                                          {field.options?.map((opt, i) => (
+                                            <div
+                                              key={i}
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                updateSelectedField({ value: opt });
+                                              }}
+                                              className={`px-1 rounded cursor-pointer ${field.value === opt ? 'bg-blue-600 text-white' : 'hover:bg-slate-100'}`}
+                                            >
+                                              {opt}
+                                            </div>
+                                          ))}
+                                        </div>
+                                      ) : (
+                                        <input
+                                          type="text"
+                                          value={field.value || ''}
+                                          placeholder={formMode === 'edit' ? field.name : 'Type here...'}
+                                          disabled={field.readOnly}
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setSelectedFieldId(field.id);
+                                          }}
+                                          onFocus={(e) => {
+                                            e.stopPropagation();
+                                            setSelectedFieldId(field.id);
+                                          }}
+                                          onChange={(e) => updateSelectedField({ value: e.target.value })}
+                                          style={{
+                                            color: field.color || '#000000',
+                                            fontSize: `${dynamicFontSize}px`,
+                                            fontFamily: field.fontFamily || 'Helvetica',
+                                            fontWeight: field.isBold ? 'bold' : 'normal',
+                                            fontStyle: field.isItalic ? 'italic' : 'normal',
+                                            textDecoration: field.isUnderline ? 'underline' : 'none',
+                                          }}
+                                          className="w-full h-full px-1.5 bg-transparent focus:outline-none focus:ring-1 focus:ring-blue-400 rounded-sm pointer-events-auto cursor-text select-text"
+                                        />
+                                      )}
+
+                                      {/* Resize Handles */}
+                                      {isSelected && (
+                                        <>
+                                          {['nw', 'ne', 'sw', 'se'].map((h) => {
+                                            const pos = {
+                                              nw: '-top-1.5 -left-1.5 cursor-nwse-resize',
+                                              ne: '-top-1.5 -right-1.5 cursor-nesw-resize',
+                                              sw: '-bottom-1.5 -left-1.5 cursor-nesw-resize',
+                                              se: '-bottom-1.5 -right-1.5 cursor-nwse-resize',
+                                            }[h];
+                                            return (
+                                              <div
+                                                key={h}
+                                                onMouseDown={(e) => handleFieldPointerDown(e, field, h)}
+                                                onTouchStart={(e) => handleFieldPointerDown(e, field, h)}
+                                                className={`absolute w-3 h-3 bg-white border-2 border-blue-600 rounded-xs shadow-xs z-40 ${pos}`}
+                                              />
+                                            );
+                                          })}
+                                        </>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Floating Bottom Pagination & Zoom Bar */}
+                        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 bg-slate-900/90 backdrop-blur-md text-white px-3 py-1.5 rounded-2xl flex items-center space-x-2 text-xs shadow-xl z-30">
+                          <button
+                            type="button"
+                            onClick={() => setFormCurrentPage((p) => Math.max(1, p - 1))}
+                            disabled={formCurrentPage <= 1}
+                            className="p-1 hover:bg-slate-700 rounded-lg disabled:opacity-30 cursor-pointer"
+                          >
+                            <ChevronUp className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setFormCurrentPage((p) => Math.min(formTotalPages, p + 1))}
+                            disabled={formCurrentPage >= formTotalPages}
+                            className="p-1 hover:bg-slate-700 rounded-lg disabled:opacity-30 cursor-pointer"
+                          >
+                            <ChevronDown className="w-3.5 h-3.5" />
+                          </button>
+                          <div className="h-3.5 w-px bg-slate-700" />
+                          <span className="font-bold px-1.5 py-0.5 bg-slate-800 rounded text-slate-200">
+                            {formCurrentPage}
+                          </span>
+                          <span className="text-slate-400">/ {formTotalPages}</span>
+                          <div className="h-3.5 w-px bg-slate-700" />
+                          <button
+                            type="button"
+                            onClick={() => setFormZoom((z) => Math.max(50, z - 15))}
+                            className="p-1 hover:bg-slate-700 rounded-lg cursor-pointer"
+                          >
+                            <ZoomOut className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setFormZoom((z) => Math.min(300, z + 15))}
+                            className="p-1 hover:bg-slate-700 rounded-lg cursor-pointer"
+                          >
+                            <ZoomIn className="w-3.5 h-3.5" />
+                          </button>
+                          <span className="font-mono text-slate-300 font-semibold text-[11px]">{formZoom}%</span>
+                          <div className="h-3.5 w-px bg-slate-700" />
+                          <button
+                            type="button"
+                            onClick={() => setFormZoom(100)}
+                            title="Fit page to screen"
+                            className="p-1 hover:bg-slate-700 rounded-lg text-slate-300 hover:text-white cursor-pointer"
+                          >
+                            <Maximize className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+
+                  {/* Right Section: Properties Sidebar */}
+                  <div className="lg:col-span-4 bg-white border border-slate-200 rounded-3xl p-5 shadow-sm h-full min-h-0 flex flex-col justify-between">
+                    <div className="flex-1 min-h-0 overflow-y-auto pr-1">
+                      {selectedField ? (
+                        <div className="space-y-4">
+                          <div className="flex items-center justify-between border-b pb-2.5">
+                            <h3 className="text-sm font-bold text-slate-900 capitalize">
+                              {selectedField.type === 'formtext' ? 'Static Text Annotation' : `${selectedField.type} Field Tool`}
+                            </h3>
+                            <button
+                              type="button"
+                              onClick={() => deleteSelectedField(selectedField.id)}
+                              className="text-xs text-red-500 hover:text-red-700 font-semibold cursor-pointer flex items-center space-x-1"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              <span>Delete</span>
+                            </button>
+                          </div>
+
+                          {/* Field Name Input */}
+                          <div className="space-y-1">
+                            <label className="text-[11px] font-semibold text-slate-700">
+                              {selectedField.type === 'formtext' ? 'Label Identifier:' : 'Field Name*:'}
+                            </label>
+                            <input
+                              type="text"
+                              value={selectedField.name || ''}
+                              onChange={(e) => updateSelectedField({ name: e.target.value })}
+                              className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                            />
+                          </div>
+
+                          {/* Text Content for Form Text */}
+                          {selectedField.type === 'formtext' ? (
+                            <div className="space-y-1">
+                              <label className="text-[11px] font-semibold text-slate-700">Text Content:</label>
+                              <input
+                                type="text"
+                                value={selectedField.value || ''}
+                                onChange={(e) => updateSelectedField({ value: e.target.value })}
+                                className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                              />
+                            </div>
+                          ) : (
+                            /* Default Value for normal fields */
+                            <div className="space-y-1">
+                              <label className="text-[11px] font-semibold text-slate-700">Default Value:</label>
+                              <input
+                                type="text"
+                                value={selectedField.value || ''}
+                                onChange={(e) => updateSelectedField({ value: e.target.value })}
+                                className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                              />
+                            </div>
+                          )}
+
+                          {/* Dropdown Options */}
+                          {(selectedField.type === 'combobox' || selectedField.type === 'listbox') && (
+                            <div className="space-y-1.5">
+                              <label className="text-[11px] font-semibold text-slate-700">Options</label>
+                              <div className="space-y-1.5 max-h-32 overflow-y-auto pr-1">
+                                {selectedField.options?.map((opt, optIdx) => (
+                                  <div key={optIdx} className="flex items-center space-x-2">
+                                    <input
+                                      type="text"
+                                      value={opt}
+                                      onChange={(e) => {
+                                        const copy = [...selectedField.options];
+                                        copy[optIdx] = e.target.value;
+                                        updateSelectedField({ options: copy });
+                                      }}
+                                      className="flex-1 px-2 py-1 text-xs bg-slate-50 border border-slate-200 rounded-lg"
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const copy = selectedField.options.filter((_, idx) => idx !== optIdx);
+                                        updateSelectedField({ options: copy });
+                                      }}
+                                      className="text-slate-400 hover:text-red-500 cursor-pointer"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  updateSelectedField({
+                                    options: [...(selectedField.options || []), `Option ${selectedField.options.length + 1}`],
+                                  })
+                                }
+                                className="text-[11px] font-bold text-blue-600 hover:text-blue-700 cursor-pointer flex items-center space-x-1"
+                              >
+                                <Plus className="w-3 h-3" />
+                                <span>Add Option</span>
+                              </button>
+                            </div>
+                          )}
+
+                          {/* Properties - Excluded completely for formtext */}
+                          {selectedField.type !== 'formtext' && (
+                            <div className="space-y-2 pt-2 border-t border-slate-100 text-xs">
+                              <label className="font-bold text-slate-800 block mb-1">Properties</label>
+                              <label className="flex items-center space-x-2 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={selectedField.readOnly || false}
+                                  onChange={(e) => updateSelectedField({ readOnly: e.target.checked })}
+                                  className="w-3.5 h-3.5 rounded accent-blue-600"
+                                />
+                                <span className="text-slate-700">Read Only</span>
+                              </label>
+                              <label className="flex items-center space-x-2 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={selectedField.required || false}
+                                  onChange={(e) => updateSelectedField({ required: e.target.checked })}
+                                  className="w-3.5 h-3.5 rounded accent-blue-600"
+                                />
+                                <span className="text-slate-700">Required</span>
+                              </label>
+                              {selectedField.type === 'text' && (
+                                <label className="flex items-center space-x-2 cursor-pointer">
+                                  <input
+                                    type="checkbox"
+                                    checked={selectedField.multiline || false}
+                                    onChange={(e) => updateSelectedField({ multiline: e.target.checked })}
+                                    className="w-3.5 h-3.5 rounded accent-blue-600"
+                                  />
+                                  <span className="text-slate-700">Multiline</span>
+                                </label>
+                              )}
+                              <label className="flex items-center space-x-2 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={selectedField.includeIndicator || false}
+                                  onChange={(e) => updateSelectedField({ includeIndicator: e.target.checked })}
+                                  className="w-3.5 h-3.5 rounded accent-blue-600"
+                                />
+                                <span className="text-slate-700">Include Field Indicator</span>
+                              </label>
+
+                              {/* Indicator Text Sub-field */}
+                              {selectedField.includeIndicator && (
+                                <div className="pl-6 pt-1">
+                                  <input
+                                    type="text"
+                                    placeholder="Sign Here"
+                                    value={selectedField.indicatorText || ''}
+                                    onChange={(e) => updateSelectedField({ indicatorText: e.target.value })}
+                                    className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs"
+                                  />
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          {/* Field Size Controls */}
+                          <div className="space-y-1.5 pt-2 border-t border-slate-100 text-xs">
+                            <label className="font-bold text-slate-800 block">Field Size (% of page)</label>
+                            <div className="grid grid-cols-2 gap-2">
+                              <div>
+                                <span className="text-[10px] text-slate-500 block mb-0.5">Width (%)</span>
+                                <input
+                                  type="number"
+                                  min="1"
+                                  max="100"
+                                  step="0.5"
+                                  value={Number((selectedField.widthPercent || 20).toFixed(1))}
+                                  onChange={(e) => updateSelectedField({ widthPercent: Math.max(1, parseFloat(e.target.value) || 1) })}
+                                  className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg font-mono text-center text-xs"
+                                />
+                              </div>
+                              <div>
+                                <span className="text-[10px] text-slate-500 block mb-0.5">Height (%)</span>
+                                <input
+                                  type="number"
+                                  min="1"
+                                  max="100"
+                                  step="0.5"
+                                  value={Number((selectedField.heightPercent || 3).toFixed(1))}
+                                  onChange={(e) => updateSelectedField({ heightPercent: Math.max(1, parseFloat(e.target.value) || 1) })}
+                                  className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg font-mono text-center text-xs"
+                                />
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Typography and Color Pickers */}
+                          <div className="space-y-1.5 pt-2 border-t border-slate-100 text-xs">
+                            <label className="font-bold text-slate-800 block">Text Formatting</label>
+                            <div className="flex items-center space-x-1.5">
+                              <select
+                                value={selectedField.fontFamily || 'Helvetica'}
+                                onChange={(e) => updateSelectedField({ fontFamily: e.target.value })}
+                                className="px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg flex-1 text-xs"
+                              >
+                                <option value="Helvetica">Arial / Helvetica</option>
+                                <option value="Times">Times New Roman</option>
+                                <option value="Courier">Courier</option>
+                              </select>
+
+                              <select
+                                value={selectedField.fontSize || 11}
+                                onChange={(e) => updateSelectedField({ fontSize: parseInt(e.target.value, 10) })}
+                                className="w-12 px-1 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs"
+                              >
+                                {[9, 10, 11, 12, 14, 16, 18].map((sz) => (
+                                  <option key={sz} value={sz}>{sz}px</option>
+                                ))}
+                              </select>
+
+                              <div className="flex items-center border border-slate-200 rounded-lg p-0.5 bg-slate-50">
+                                <button
+                                  type="button"
+                                  onClick={() => updateSelectedField({ isBold: !selectedField.isBold })}
+                                  className={`px-1.5 py-0.5 font-bold text-xs rounded cursor-pointer ${selectedField.isBold ? 'bg-blue-600 text-white' : 'text-slate-600'}`}
+                                >
+                                  B
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => updateSelectedField({ isItalic: !selectedField.isItalic })}
+                                  className={`px-1.5 py-0.5 italic text-xs rounded cursor-pointer ${selectedField.isItalic ? 'bg-blue-600 text-white' : 'text-slate-600'}`}
+                                >
+                                  I
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => updateSelectedField({ isUnderline: !selectedField.isUnderline })}
+                                  className={`px-1.5 py-0.5 underline text-xs rounded cursor-pointer ${selectedField.isUnderline ? 'bg-blue-600 text-white' : 'text-slate-600'}`}
+                                >
+                                  U
+                                </button>
+                              </div>
+                            </div>
+
+                            <div className="pt-1.5 flex items-center space-x-2">
+                              {['#000000', '#1E40AF', '#DC2626', '#16A34A', '#D97706', '#9333EA'].map((col) => (
+                                <button
+                                  key={col}
+                                  type="button"
+                                  onClick={() => updateSelectedField({ color: col })}
+                                  style={{ backgroundColor: col }}
+                                  className={`w-5 h-5 rounded-full border cursor-pointer transition ${
+                                    selectedField.color === col ? 'ring-2 ring-blue-500 scale-110 border-white' : 'border-slate-200'
+                                  }`}
+                                />
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="text-center py-10 space-y-3">
+                          <FileText className="w-12 h-12 text-slate-300 mx-auto" />
+                          <div>
+                            <h4 className="text-xs font-bold text-slate-800">
+                              {formFields.length === 0 ? 'This document has no form fields' : 'Form Field List'}
+                            </h4>
+                            <p className="text-[11px] text-slate-400 mt-1 max-w-[200px] mx-auto leading-relaxed">
+                              {formMode === 'edit'
+                                ? 'Click anywhere on the PDF page to add inputs.'
+                                : 'Switch to Edit Form mode to add fields, or fill inputs directly.'}
+                            </p>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    <button
+                      onClick={executeAction}
+                      disabled={isProcessing}
+                      className="w-full py-3.5 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white font-bold rounded-2xl shadow-lg shadow-red-500/20 transition flex items-center justify-center space-x-2 cursor-pointer mt-3 shrink-0"
+                    >
+                      {isProcessing ? (
+                        <div className="flex items-center space-x-2">
+                          <Loader2 className="w-4 h-4 animate-spin text-white" />
+                          <span className="text-xs">Generating Filled PDF...</span>
+                        </div>
+                      ) : (
+                        <>
+                          <span className="text-sm font-black tracking-wide">Download</span>
+                          <div className="w-6 h-6 rounded-full bg-white/20 flex items-center justify-center">
+                            <ArrowRight className="w-3.5 h-3.5 text-white" />
+                          </div>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* 0. Crop PDF Studio */}
+            {tool?.id === 'crop' && (
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-                {/* Left Preview Canvas */}
                 <div className="lg:col-span-8 bg-slate-200/60 rounded-3xl p-3 sm:p-6 border border-slate-200 flex flex-col items-center min-h-[420px] sm:min-h-[580px] relative overflow-hidden">
                   {isRenderingPages ? (
                     <div className="py-32 sm:py-44 flex flex-col items-center justify-center space-y-3 text-slate-400">
@@ -971,7 +1821,6 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                         style={{ width: `${Math.min(100, Math.max(cropZoom, 80))}%` }}
                         className="relative bg-white shadow-xl rounded-md transition-all duration-150 select-none overflow-hidden touch-none"
                       >
-                        {/* Page Preview Image */}
                         <img
                           src={cropPageDataUrl}
                           alt={`Page ${cropCurrentPage}`}
@@ -979,13 +1828,11 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                           draggable={false}
                         />
 
-                        {/* Dimmer Overlays */}
                         <div className="absolute top-0 left-0 right-0 bg-slate-900/40 pointer-events-none" style={{ height: `${currentActiveBox.y}%` }} />
                         <div className="absolute bottom-0 left-0 right-0 bg-slate-900/40 pointer-events-none" style={{ height: `${100 - (currentActiveBox.y + currentActiveBox.height)}%` }} />
                         <div className="absolute left-0 bg-slate-900/40 pointer-events-none" style={{ top: `${currentActiveBox.y}%`, height: `${currentActiveBox.height}%`, width: `${currentActiveBox.x}%` }} />
                         <div className="absolute right-0 bg-slate-900/40 pointer-events-none" style={{ top: `${currentActiveBox.y}%`, height: `${currentActiveBox.height}%`, width: `${100 - (currentActiveBox.x + currentActiveBox.width)}%` }} />
 
-                        {/* Draggable & Resizable Active Crop Box */}
                         <div
                           onMouseDown={(e) => handleCropPointerDown(e)}
                           onTouchStart={(e) => handleCropPointerDown(e)}
@@ -997,7 +1844,6 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                           }}
                           className="absolute border-2 border-dashed border-rose-500 cursor-move z-20 group shadow-[0_0_0_9999px_rgba(0,0,0,0.3)] touch-none"
                         >
-                          {/* Handles with larger mobile tap-targets */}
                           {['nw', 'ne', 'sw', 'se', 'n', 's', 'e', 'w'].map((handle) => {
                             const posClasses = {
                               nw: '-top-2.5 -left-2.5 cursor-nwse-resize',
@@ -1021,7 +1867,6 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                         </div>
                       </div>
 
-                      {/* Floating Bottom Control Bar (Responsive for Mobile) */}
                       <div className="mt-5 sm:mt-8 bg-slate-800/90 backdrop-blur-md text-white px-3 py-1.5 sm:px-4 sm:py-2 rounded-2xl flex items-center space-x-2 sm:space-x-3 text-xs shadow-lg max-w-full overflow-x-auto">
                         <button
                           type="button"
@@ -1073,7 +1918,6 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                   ) : null}
                 </div>
 
-                {/* Right Options Panel */}
                 <div className="lg:col-span-4 bg-white border border-slate-200 rounded-3xl p-6 sm:p-8 space-y-6 shadow-sm">
                   <div className="flex items-center justify-between border-b pb-4">
                     <div>
@@ -1104,7 +1948,6 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                     </div>
                   </div>
 
-                  {/* Info Notice Box */}
                   <div className="p-4 bg-sky-50 border border-sky-200/80 rounded-2xl flex items-start space-x-3 text-xs text-sky-900 leading-relaxed">
                     <Info className="w-4 h-4 text-sky-600 shrink-0 mt-0.5" />
                     <p className="font-medium">
@@ -1112,7 +1955,6 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                     </p>
                   </div>
 
-                  {/* Pages Option Section */}
                   <div className="space-y-3 pt-2">
                     <label className="text-sm font-bold text-slate-900 block">Apply crop to:</label>
                     <div className="flex flex-col space-y-2">
@@ -1158,7 +2000,6 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                     </div>
                   </div>
 
-                  {/* Big Action Button */}
                   <button
                     onClick={executeAction}
                     disabled={isProcessing}
@@ -1183,7 +2024,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
             )}
 
             {/* 1. Protect PDF Studio */}
-            {tool.id === 'protect' && (
+            {tool?.id === 'protect' && (
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
                 <div className="lg:col-span-8 bg-white border border-slate-200 rounded-3xl p-6 shadow-sm flex flex-col items-center justify-center min-h-[420px]">
                   <div className="w-full flex items-center justify-between pb-4 border-b border-slate-100 text-xs font-semibold mb-6">
@@ -1262,7 +2103,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
             )}
 
             {/* 2. Unlock PDF Studio */}
-            {tool.id === 'unlock' && (
+            {tool?.id === 'unlock' && (
               <div className="max-w-xl mx-auto bg-white border border-slate-200 rounded-3xl p-8 space-y-6 shadow-sm">
                 <div className="text-center space-y-2">
                   <div className="w-12 h-12 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center mx-auto shadow-sm">
@@ -1305,7 +2146,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                       <div>
                         <p className="font-bold text-amber-900">Under Development Notice</p>
                         <p className="mt-0.5 text-amber-800 leading-relaxed">
-                          Automatic password stripping is currently under active testing and refinement. It works seamlessly on permission-restricted documents and common default patterns, but may not be able to bypass complex AES user open passwords.
+                          Automatic password stripping removes permissions and tests standard keys, but cannot bypass high-entropy user open passwords.
                         </p>
                       </div>
                     </div>
@@ -1358,7 +2199,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
             )}
 
             {/* 3. Image to PDF Studio */}
-            {tool.id === 'jpg-to-pdf' && (
+            {tool?.id === 'jpg-to-pdf' && (
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
                 <div className="lg:col-span-8 bg-white border border-slate-200 rounded-3xl p-6 shadow-sm space-y-4">
                   <div className="flex items-center justify-between pb-4 border-b border-slate-100 text-xs font-semibold">
@@ -1460,7 +2301,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                         onClick={() => setImageToPdfOptions({ ...imageToPdfOptions, orientation: 'landscape' })}
                         className={`p-3 rounded-2xl border text-center flex flex-col items-center justify-center space-y-1.5 transition cursor-pointer ${
                           imageToPdfOptions.orientation === 'landscape'
-                            ? 'border-rose-500 bg-rose-50/50 text-rose-700 font-bold ring-2 ring-rose-500/20'
+                            ? 'border-rose-500 bg-rose-50 text-rose-700 font-bold ring-2 ring-rose-500/20'
                             : 'border-slate-200 bg-white text-slate-600'
                         }`}
                       >
@@ -1551,7 +2392,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
             )}
 
             {/* 4. Watermark Studio */}
-            {tool.id === 'watermark' && (
+            {tool?.id === 'watermark' && (
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
                 <div className="lg:col-span-8 bg-white border border-slate-200 rounded-3xl p-6 shadow-sm">
                   <div className="flex items-center justify-between pb-4 border-b border-slate-100 text-xs font-semibold">
@@ -1834,7 +2675,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
             )}
 
             {/* 5. Page Numbers Studio */}
-            {tool.id === 'page-numbers' && (
+            {tool?.id === 'page-numbers' && (
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
                 <div className="lg:col-span-8 bg-white border border-slate-200 rounded-3xl p-6 shadow-sm">
                   <div className="flex items-center justify-between pb-4 border-b border-slate-100 text-xs font-semibold">
@@ -2065,7 +2906,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
             )}
 
             {/* 6. Rotate PDF Studio */}
-            {tool.id === 'rotate' && (
+            {tool?.id === 'rotate' && (
               <div className="bg-white border border-slate-200 rounded-3xl p-6 space-y-6 shadow-sm">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 bg-purple-50 rounded-2xl border border-purple-100 text-xs">
                   <div className="flex items-center space-x-2 truncate">
@@ -2112,7 +2953,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
             )}
 
             {/* 7. Organize PDF Studio */}
-            {tool.id === 'organize' && (
+            {tool?.id === 'organize' && (
               <div className="bg-white border border-slate-200 rounded-3xl p-6 space-y-6 shadow-sm">
                 <div className="flex items-center justify-between text-xs text-slate-500 font-medium">
                   <span>Drag & drop pages to rearrange. Hover to rotate or delete individual pages.</span>
@@ -2153,10 +2994,10 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
             )}
 
             {/* 8. Remove / Extract Pages Studio */}
-            {(tool.id === 'remove' || tool.id === 'extract') && (
+            {(tool?.id === 'remove' || tool?.id === 'extract') && (
               <div className="bg-white border border-slate-200 rounded-3xl p-6 space-y-6 shadow-sm">
                 <div className="flex items-center justify-between text-xs font-bold text-slate-700">
-                  <span>Pages to {tool.id === 'remove' ? 'remove' : 'extract'} (Type range or click thumbnails):</span>
+                  <span>Pages to {tool?.id === 'remove' ? 'remove' : 'extract'} (Type range or click thumbnails):</span>
                   <button onClick={() => changeFileInputRef.current?.click()} className="text-rose-600 hover:text-rose-700 font-bold flex items-center space-x-1 cursor-pointer">
                     <RefreshCw className="w-3.5 h-3.5" /><span>Change File</span>
                   </button>
@@ -2172,7 +3013,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                 <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-4">
                   {thumbnails.map((thumb) => {
                     const isSelected = selectedPages.has(thumb.pageNumber);
-                    const isRemove = tool.id === 'remove';
+                    const isRemove = tool?.id === 'remove';
                     return (
                       <div
                         key={thumb.pageNumber}
@@ -2203,16 +3044,16 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                   onClick={executeAction}
                   disabled={isProcessing || selectedPages.size === 0}
                   className={`w-full py-4 text-white font-bold rounded-2xl shadow-md transition flex items-center justify-center space-x-2 cursor-pointer ${
-                    tool.id === 'remove' ? 'bg-red-600 hover:bg-red-700' : 'bg-emerald-600 hover:bg-emerald-700'
+                    tool?.id === 'remove' ? 'bg-red-600 hover:bg-red-700' : 'bg-emerald-600 hover:bg-emerald-700'
                   }`}
                 >
-                  {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <span>{tool.id === 'remove' ? `Remove ${selectedPages.size} Pages` : `Extract ${selectedPages.size} Pages`}</span>}
+                  {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <span>{tool?.id === 'remove' ? `Remove ${selectedPages.size} Pages` : `Extract ${selectedPages.size} Pages`}</span>}
                 </button>
               </div>
             )}
 
             {/* 9. Compress PDF Studio */}
-            {tool.id === 'compress' && (
+            {tool?.id === 'compress' && (
               <div className="bg-white border border-slate-200 rounded-3xl p-8 max-w-2xl mx-auto space-y-6 shadow-sm">
                 <div className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl border border-slate-200 text-xs">
                   <div className="flex items-center space-x-2.5 truncate">
@@ -2274,7 +3115,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
             )}
 
             {/* 10. Single File Conversions */}
-            {['word-to-pdf', 'powerpoint-to-pdf', 'excel-to-pdf', 'html-to-pdf', 'pdf-to-word', 'pdf-to-powerpoint', 'pdf-to-excel', 'pdf-to-jpg', 'to-markdown'].includes(tool.id) && (
+            {['word-to-pdf', 'powerpoint-to-pdf', 'excel-to-pdf', 'html-to-pdf', 'pdf-to-word', 'pdf-to-powerpoint', 'pdf-to-excel', 'pdf-to-jpg', 'to-markdown'].includes(tool?.id) && (
               <div className="bg-white border border-slate-200 rounded-3xl p-8 max-w-lg mx-auto space-y-6 shadow-sm">
                 <div className="space-y-4">
                   <div className="text-center font-bold text-xs uppercase tracking-wider text-slate-400">
@@ -2283,7 +3124,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
 
                   {files[0] && renderSingleFileThumbnailCard(files[0])}
 
-                  {tool.id === 'html-to-pdf' && htmlInputMode === 'code' && (
+                  {tool?.id === 'html-to-pdf' && htmlInputMode === 'code' && (
                     <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl font-mono text-xs text-slate-600 truncate">
                       {rawHtmlCode.substring(0, 100)}...
                     </div>
@@ -2294,10 +3135,10 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                   onClick={executeAction}
                   disabled={isProcessing}
                   className={`w-full py-4 text-white font-bold rounded-2xl shadow-md transition flex items-center justify-center space-x-2 cursor-pointer ${
-                    tool.id === 'word-to-pdf' || tool.id === 'pdf-to-word' || tool.id === 'to-markdown' ? 'bg-blue-600 hover:bg-blue-700' :
-                    tool.id === 'powerpoint-to-pdf' || tool.id === 'pdf-to-powerpoint' ? 'bg-orange-600 hover:bg-orange-700' :
-                    tool.id === 'excel-to-pdf' || tool.id === 'pdf-to-excel' ? 'bg-emerald-600 hover:bg-emerald-700' :
-                    tool.id === 'html-to-pdf' ? 'bg-amber-600 hover:bg-amber-700' : 'bg-rose-600 hover:bg-rose-700'
+                    tool?.id === 'word-to-pdf' || tool?.id === 'pdf-to-word' || tool?.id === 'to-markdown' ? 'bg-blue-600 hover:bg-blue-700' :
+                    tool?.id === 'powerpoint-to-pdf' || tool?.id === 'pdf-to-powerpoint' ? 'bg-orange-600 hover:bg-orange-700' :
+                    tool?.id === 'excel-to-pdf' || tool?.id === 'pdf-to-excel' ? 'bg-emerald-600 hover:bg-emerald-700' :
+                    tool?.id === 'html-to-pdf' ? 'bg-amber-600 hover:bg-amber-700' : 'bg-rose-600 hover:bg-rose-700'
                   }`}
                 >
                   {isProcessing ? (
@@ -2307,7 +3148,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                     </div>
                   ) : (
                     <>
-                      <span>{tool.id === 'to-markdown' ? 'Convert to Markdown' : tool.id.endsWith('-to-pdf') ? 'Convert to PDF' : 'Convert Document'}</span>
+                      <span>{tool?.id === 'to-markdown' ? 'Convert to Markdown' : tool?.id.endsWith('-to-pdf') ? 'Convert to PDF' : 'Convert Document'}</span>
                       <ArrowRight className="w-4 h-4" />
                     </>
                   )}
@@ -2316,7 +3157,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
             )}
 
             {/* 11. Visual Merge PDF Studio */}
-            {tool.id === 'merge' && (
+            {tool?.id === 'merge' && (
               <div className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-8 shadow-sm space-y-6">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-100 text-xs">
                   <div>
@@ -2358,7 +3199,6 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                           draggedMergeIndex === idx ? 'opacity-40 scale-95 border-rose-400' : 'border-slate-200 hover:border-rose-400 hover:shadow-md'
                         }`}
                       >
-                        {/* Cover Thumbnail Preview */}
                         <div className="p-2 flex items-center justify-center min-h-[160px] bg-white rounded-xl border border-slate-100">
                           {card.previewUrl ? (
                             <img src={card.previewUrl} alt={card.file.name} className="max-h-36 object-contain shadow-xs" />
@@ -2367,7 +3207,6 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                           )}
                         </div>
 
-                        {/* Top Delete Action Button */}
                         <div className="absolute top-3 right-3 opacity-90 sm:opacity-0 sm:group-hover:opacity-100 transition">
                           <button
                             type="button"
@@ -2379,7 +3218,6 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                           </button>
                         </div>
 
-                        {/* Card Footer Bar */}
                         <div className="px-2 py-1.5 bg-white border-t border-slate-100 flex items-center justify-between text-[11px] font-semibold text-slate-600 mt-1 rounded-b-xl">
                           <div className="flex items-center space-x-1 truncate max-w-[90px]">
                             <GripVertical className="w-3 h-3 text-slate-400 shrink-0" />
@@ -2421,12 +3259,11 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
             )}
           </div>
         ) : (
-          /* Result & Download Card */
-          <div className="bg-white border border-slate-200 rounded-3xl p-10 max-w-lg mx-auto text-center space-y-6 shadow-md">
+          <div className="bg-white border border-slate-200 rounded-3xl p-10 max-w-lg mx-auto text-center space-y-6 shadow-md my-auto">
             <CheckCircle2 className="w-16 h-16 text-emerald-500 mx-auto" />
             <h3 className="text-xl font-bold text-slate-900">Task Completed Successfully!</h3>
 
-            {tool.id === 'compress' && result.originalSize && result.compressedSize && (
+            {tool?.id === 'compress' && result.originalSize && result.compressedSize && (
               <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-center justify-around text-xs">
                 <div>
                   <p className="text-[10px] text-slate-400 font-bold uppercase">Original</p>
