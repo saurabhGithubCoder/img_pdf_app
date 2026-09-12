@@ -49,7 +49,9 @@ import {
   ListOrdered,
   ChevronDown as ChevronDownIcon,
   AlignLeft,
-  Move
+  Move,
+  X as CloseIcon,
+  SlidersVertical
 } from 'lucide-react';
 import {
   mergePDFs,
@@ -179,6 +181,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
     color: '#E11D48'
   });
 
+  // Crop PDF Tool State
   const [cropPageMode, setCropPageMode] = useState('custom');
   const [cropCurrentPage, setCropCurrentPage] = useState(1);
   const [cropZoom, setCropZoom] = useState(68);
@@ -311,6 +314,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
   const [formCurrentPage, setFormCurrentPage] = useState(1);
   const [formTotalPages, setFormTotalPages] = useState(1);
   const [isFormLoading, setIsFormLoading] = useState(false);
+  const [isMobileDrawerOpen, setIsMobileDrawerOpen] = useState(false);
 
   const [formPageDimensions, setFormPageDimensions] = useState({ width: 595, height: 842 });
   const [formViewportSize, setFormViewportSize] = useState({ width: 800, height: 600 });
@@ -319,6 +323,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
   const formViewportScrollRef = useRef(null);
   const formFieldDragRef = useRef({ isDragging: false, isResizing: false, handle: null, fieldId: null, startX: 0, startY: 0, initialPercent: null });
 
+  // Measure form viewport dynamically
   useEffect(() => {
     if (!formViewportScrollRef.current) return;
     const observer = new ResizeObserver((entries) => {
@@ -364,7 +369,6 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
 
   const renderCurrentFormPage = async (file, pageNum) => {
     try {
-      // Pass `true` as 4th argument to disable baking existing fields into the background preview image
       const data = await renderSinglePdfPage(file, pageNum, 1.8, true);
       setFormPageDataUrl(data.dataUrl);
       setFormTotalPages(data.totalPages);
@@ -387,9 +391,8 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
 
   const deleteSelectedField = (id) => {
     setFormFields((prev) => prev.filter((f) => f.id !== id));
-    if (selectedFieldId === id) {
-      setSelectedFieldId(null);
-    }
+    if (selectedFieldId === id) setSelectedFieldId(null);
+    setIsMobileDrawerOpen(false);
   };
 
   const handleCanvasClickToAddField = (e) => {
@@ -542,8 +545,9 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
     window.removeEventListener('touchend', handleFieldPointerUp);
   };
 
-  const availW = Math.max(100, formViewportSize.width - 48);
-  const availH = Math.max(100, formViewportSize.height - 48);
+  // Compute exact pixel dimensions matching PDF aspect ratio without letterboxing
+  const availW = Math.max(100, formViewportSize.width - 24);
+  const availH = Math.max(100, formViewportSize.height - 24);
   const pageW = formPageDimensions.width || 595;
   const pageH = formPageDimensions.height || 842;
   const baseScale = Math.min(availW / pageW, availH / pageH);
@@ -1103,6 +1107,270 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
     );
   };
 
+  // Reusable Field Properties Panel
+  const renderFieldPropertiesContent = () => (
+    <>
+      {selectedField ? (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between border-b pb-2.5">
+            <h3 className="text-sm font-bold text-slate-900 capitalize">
+              {selectedField.type === 'formtext' ? 'Static Text Annotation' : `${selectedField.type} Field Tool`}
+            </h3>
+            <button
+              type="button"
+              onClick={() => deleteSelectedField(selectedField.id)}
+              className="text-xs text-red-500 hover:text-red-700 font-semibold cursor-pointer flex items-center space-x-1"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Delete</span>
+            </button>
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-[11px] font-semibold text-slate-700">
+              {selectedField.type === 'formtext' ? 'Label Identifier:' : 'Field Name*:'}
+            </label>
+            <input
+              type="text"
+              value={selectedField.name || ''}
+              onChange={(e) => updateSelectedField({ name: e.target.value })}
+              className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+            />
+          </div>
+
+          {selectedField.type === 'formtext' ? (
+            <div className="space-y-1">
+              <label className="text-[11px] font-semibold text-slate-700">Text Content:</label>
+              <input
+                type="text"
+                value={selectedField.value || ''}
+                onChange={(e) => updateSelectedField({ value: e.target.value })}
+                className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+              />
+            </div>
+          ) : (
+            <div className="space-y-1">
+              <label className="text-[11px] font-semibold text-slate-700">Default Value:</label>
+              <input
+                type="text"
+                value={selectedField.value || ''}
+                onChange={(e) => updateSelectedField({ value: e.target.value })}
+                className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+              />
+            </div>
+          )}
+
+          {(selectedField.type === 'combobox' || selectedField.type === 'listbox') && (
+            <div className="space-y-1.5">
+              <label className="text-[11px] font-semibold text-slate-700">Options</label>
+              <div className="space-y-1.5 max-h-32 overflow-y-auto pr-1">
+                {selectedField.options?.map((opt, optIdx) => (
+                  <div key={optIdx} className="flex items-center space-x-2">
+                    <input
+                      type="text"
+                      value={opt}
+                      onChange={(e) => {
+                        const copy = [...selectedField.options];
+                        copy[optIdx] = e.target.value;
+                        updateSelectedField({ options: copy });
+                      }}
+                      className="flex-1 px-2 py-1 text-xs bg-slate-50 border border-slate-200 rounded-lg"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const copy = selectedField.options.filter((_, idx) => idx !== optIdx);
+                        updateSelectedField({ options: copy });
+                      }}
+                      className="text-slate-400 hover:text-red-500 cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={() =>
+                  updateSelectedField({
+                    options: [...(selectedField.options || []), `Option ${selectedField.options.length + 1}`],
+                  })
+                }
+                className="text-[11px] font-bold text-blue-600 hover:text-blue-700 cursor-pointer flex items-center space-x-1"
+              >
+                <Plus className="w-3 h-3" />
+                <span>Add Option</span>
+              </button>
+            </div>
+          )}
+
+          {selectedField.type !== 'formtext' && (
+            <div className="space-y-2 pt-2 border-t border-slate-100 text-xs">
+              <label className="font-bold text-slate-800 block mb-1">Properties</label>
+              <label className="flex items-center space-x-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={selectedField.readOnly || false}
+                  onChange={(e) => updateSelectedField({ readOnly: e.target.checked })}
+                  className="w-3.5 h-3.5 rounded accent-blue-600"
+                />
+                <span className="text-slate-700">Read Only</span>
+              </label>
+              <label className="flex items-center space-x-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={selectedField.required || false}
+                  onChange={(e) => updateSelectedField({ required: e.target.checked })}
+                  className="w-3.5 h-3.5 rounded accent-blue-600"
+                />
+                <span className="text-slate-700">Required</span>
+              </label>
+              {selectedField.type === 'text' && (
+                <label className="flex items-center space-x-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={selectedField.multiline || false}
+                    onChange={(e) => updateSelectedField({ multiline: e.target.checked })}
+                    className="w-3.5 h-3.5 rounded accent-blue-600"
+                  />
+                  <span className="text-slate-700">Multiline</span>
+                </label>
+              )}
+              <label className="flex items-center space-x-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={selectedField.includeIndicator || false}
+                  onChange={(e) => updateSelectedField({ includeIndicator: e.target.checked })}
+                  className="w-3.5 h-3.5 rounded accent-blue-600"
+                />
+                <span className="text-slate-700">Include Field Indicator</span>
+              </label>
+
+              {selectedField.includeIndicator && (
+                <div className="pl-6 pt-1">
+                  <input
+                    type="text"
+                    placeholder="Sign Here"
+                    value={selectedField.indicatorText || ''}
+                    onChange={(e) => updateSelectedField({ indicatorText: e.target.value })}
+                    className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs"
+                  />
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="space-y-1.5 pt-2 border-t border-slate-100 text-xs">
+            <label className="font-bold text-slate-800 block">Field Size (% of page)</label>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <span className="text-[10px] text-slate-500 block mb-0.5">Width (%)</span>
+                <input
+                  type="number"
+                  min="1"
+                  max="100"
+                  step="0.5"
+                  value={Number((selectedField.widthPercent || 20).toFixed(1))}
+                  onChange={(e) => updateSelectedField({ widthPercent: Math.max(1, parseFloat(e.target.value) || 1) })}
+                  className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg font-mono text-center text-xs"
+                />
+              </div>
+              <div>
+                <span className="text-[10px] text-slate-500 block mb-0.5">Height (%)</span>
+                <input
+                  type="number"
+                  min="1"
+                  max="100"
+                  step="0.5"
+                  value={Number((selectedField.heightPercent || 3).toFixed(1))}
+                  onChange={(e) => updateSelectedField({ heightPercent: Math.max(1, parseFloat(e.target.value) || 1) })}
+                  className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg font-mono text-center text-xs"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-1.5 pt-2 border-t border-slate-100 text-xs">
+            <label className="font-bold text-slate-800 block">Text Formatting</label>
+            <div className="flex items-center space-x-1.5">
+              <select
+                value={selectedField.fontFamily || 'Helvetica'}
+                onChange={(e) => updateSelectedField({ fontFamily: e.target.value })}
+                className="px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg flex-1 text-xs"
+              >
+                <option value="Helvetica">Arial / Helvetica</option>
+                <option value="Times">Times New Roman</option>
+                <option value="Courier">Courier</option>
+              </select>
+
+              <select
+                value={selectedField.fontSize || 11}
+                onChange={(e) => updateSelectedField({ fontSize: parseInt(e.target.value, 10) })}
+                className="w-12 px-1 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs"
+              >
+                {[9, 10, 11, 12, 14, 16, 18].map((sz) => (
+                  <option key={sz} value={sz}>{sz}px</option>
+                ))}
+              </select>
+
+              <div className="flex items-center border border-slate-200 rounded-lg p-0.5 bg-slate-50">
+                <button
+                  type="button"
+                  onClick={() => updateSelectedField({ isBold: !selectedField.isBold })}
+                  className={`px-1.5 py-0.5 font-bold text-xs rounded cursor-pointer ${selectedField.isBold ? 'bg-blue-600 text-white' : 'text-slate-600'}`}
+                >
+                  B
+                </button>
+                <button
+                  type="button"
+                  onClick={() => updateSelectedField({ isItalic: !selectedField.isItalic })}
+                  className={`px-1.5 py-0.5 italic text-xs rounded cursor-pointer ${selectedField.isItalic ? 'bg-blue-600 text-white' : 'text-slate-600'}`}
+                >
+                  I
+                </button>
+                <button
+                  type="button"
+                  onClick={() => updateSelectedField({ isUnderline: !selectedField.isUnderline })}
+                  className={`px-1.5 py-0.5 underline text-xs rounded cursor-pointer ${selectedField.isUnderline ? 'bg-blue-600 text-white' : 'text-slate-600'}`}
+                >
+                  U
+                </button>
+              </div>
+            </div>
+
+            <div className="pt-1.5 flex items-center space-x-2">
+              {['#000000', '#1E40AF', '#DC2626', '#16A34A', '#D97706', '#9333EA'].map((col) => (
+                <button
+                  key={col}
+                  type="button"
+                  onClick={() => updateSelectedField({ color: col })}
+                  style={{ backgroundColor: col }}
+                  className={`w-5 h-5 rounded-full border cursor-pointer transition ${
+                    selectedField.color === col ? 'ring-2 ring-blue-500 scale-110 border-white' : 'border-slate-200'
+                  }`}
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="text-center py-10 space-y-3">
+          <FileText className="w-12 h-12 text-slate-300 mx-auto" />
+          <div>
+            <h4 className="text-xs font-bold text-slate-800">
+              {formFields.length === 0 ? 'This document has no form fields' : 'Form Field List'}
+            </h4>
+            <p className="text-[11px] text-slate-400 mt-1 max-w-[200px] mx-auto leading-relaxed">
+              {formMode === 'edit'
+                ? 'Tap anywhere on the PDF page to add inputs or tap an existing field to configure.'
+                : 'Switch to Edit Form mode to add fields, or tap inputs to fill.'}
+            </p>
+          </div>
+        </div>
+      )}
+    </>
+  );
+
   const isFormsStudio = tool?.id === 'forms' && !result;
 
   return (
@@ -1116,29 +1384,42 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
       />
 
       <header className="sticky top-0 z-30 bg-white/90 backdrop-blur-md border-b border-slate-200 shrink-0">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-14 sm:h-16 flex items-center justify-between">
+        <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 h-12 sm:h-16 flex items-center justify-between">
           <button
             onClick={onBack}
-            className="flex items-center space-x-2 text-slate-600 hover:text-slate-900 font-semibold text-sm px-3 py-1.5 rounded-xl hover:bg-slate-100 transition cursor-pointer"
+            className="flex items-center space-x-1.5 text-slate-600 hover:text-slate-900 font-semibold text-xs sm:text-sm px-2.5 py-1 rounded-xl hover:bg-slate-100 transition cursor-pointer"
           >
             <ArrowLeft className="w-4 h-4" />
             <span>Back to Home</span>
           </button>
 
-          <div className="flex items-center space-x-3">
-            <div className={`w-8 h-8 rounded-lg ${tool?.bg} ${tool?.color} flex items-center justify-center`}>
-              {tool && <tool.icon className="w-4 h-4" />}
+          <div className="flex items-center space-x-2 sm:space-x-3">
+            <div className={`w-7 h-7 sm:w-8 sm:h-8 rounded-lg ${tool?.bg} ${tool?.color} flex items-center justify-center`}>
+              {tool && <tool.icon className="w-3.5 h-3.5 sm:w-4 sm:h-4" />}
             </div>
-            <h2 className="text-base font-bold text-slate-900">{tool?.name} Workspace</h2>
+            <h2 className="text-xs sm:text-base font-bold text-slate-900 truncate max-w-[150px] sm:max-w-none">
+              {tool?.name} Workspace
+            </h2>
           </div>
 
-          <div className="w-24" />
+          {/* Quick Mobile Download Button */}
+          {isFormsStudio ? (
+            <button
+              onClick={executeAction}
+              disabled={isProcessing}
+              className="lg:hidden p-1.5 px-3 bg-red-600 text-white font-bold rounded-xl text-xs flex items-center space-x-1 shadow-sm"
+            >
+              {isProcessing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <><Download className="w-3.5 h-3.5" /><span>Save</span></>}
+            </button>
+          ) : (
+            <div className="w-16 sm:w-24" />
+          )}
         </div>
       </header>
 
-      <main className={`max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 ${isFormsStudio ? 'flex-1 overflow-hidden py-3 flex flex-col' : 'pt-6'}`}>
+      <main className={`max-w-7xl mx-auto w-full px-2 sm:px-6 lg:px-8 ${isFormsStudio ? 'flex-1 overflow-hidden py-2 sm:py-3 flex flex-col' : 'pt-6'}`}>
         {errorMsg && (
-          <div className="mb-4 p-3.5 bg-rose-50 border border-rose-200 rounded-2xl text-xs text-rose-800 flex items-start space-x-2.5 shrink-0">
+          <div className="mb-3 p-3 bg-rose-50 border border-rose-200 rounded-2xl text-xs text-rose-800 flex items-start space-x-2.5 shrink-0">
             <Info className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
             <p className="flex-1 font-medium">{errorMsg}</p>
           </div>
@@ -1148,34 +1429,34 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
           <div className={`${isFormsStudio ? 'flex-1 min-h-0 flex flex-col' : 'space-y-6'}`}>
             {/* PDF Forms Studio */}
             {tool?.id === 'forms' && (
-              <div className="flex-1 min-h-0 flex flex-col space-y-3">
-                {/* Top Control Bar with 2 unnecessary buttons removed */}
-                <div className="bg-white border border-slate-200 rounded-2xl px-3 py-2 flex flex-wrap items-center justify-between gap-2 shadow-xs shrink-0">
-                  <div className="flex items-center space-x-1.5 p-1 bg-slate-100 rounded-xl">
+              <div className="flex-1 min-h-0 flex flex-col space-y-2 sm:space-y-3">
+                {/* Top Control Bar - Clean Single Line with Mobile Scroll */}
+                <div className="bg-white border border-slate-200 rounded-2xl px-2 sm:px-3 py-1.5 sm:py-2 flex items-center justify-between gap-2 shadow-xs shrink-0 overflow-x-auto no-scrollbar">
+                  <div className="flex items-center space-x-1.5 p-0.5 sm:p-1 bg-slate-100 rounded-xl shrink-0">
                     <button
                       type="button"
                       onClick={() => { setFormMode('fill'); setActiveFormTool(null); }}
-                      className={`px-3 py-1 rounded-lg text-xs font-bold flex items-center space-x-1.5 transition cursor-pointer ${
+                      className={`px-2.5 sm:px-3 py-1 rounded-lg text-[11px] sm:text-xs font-bold flex items-center space-x-1 transition cursor-pointer ${
                         formMode === 'fill' ? 'bg-slate-800 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'
                       }`}
                     >
-                      <Pen className="w-3.5 h-3.5" />
+                      <Pen className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
                       <span>Fill Form</span>
                     </button>
                     <button
                       type="button"
                       onClick={() => { setFormMode('edit'); if (!activeFormTool) setActiveFormTool('text'); }}
-                      className={`px-3 py-1 rounded-lg text-xs font-bold flex items-center space-x-1.5 transition cursor-pointer ${
+                      className={`px-2.5 sm:px-3 py-1 rounded-lg text-[11px] sm:text-xs font-bold flex items-center space-x-1 transition cursor-pointer ${
                         formMode === 'edit' ? 'bg-slate-800 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'
                       }`}
                     >
-                      <Sliders className="w-3.5 h-3.5" />
+                      <Sliders className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
                       <span>Edit Form</span>
                     </button>
                   </div>
 
                   {formMode === 'edit' && (
-                    <div className="flex items-center space-x-1 border-x border-slate-200 px-2 overflow-x-auto">
+                    <div className="flex items-center space-x-1 border-x border-slate-200 px-1.5 sm:px-2 overflow-x-auto shrink-0">
                       {[
                         { id: 'signature', label: 'Signature', icon: Pen },
                         { id: 'freetext', label: 'Interactive Text Field', icon: Type },
@@ -1193,35 +1474,36 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                             type="button"
                             onClick={() => { setActiveFormTool(t.id); }}
                             title={t.label}
-                            className={`p-1.5 rounded-lg transition cursor-pointer flex items-center justify-center ${
+                            className={`p-1.5 rounded-lg transition cursor-pointer flex items-center justify-center shrink-0 ${
                               isActive ? 'bg-blue-50 border border-blue-500 text-blue-600 shadow-xs' : 'text-slate-600 hover:bg-slate-100'
                             }`}
                           >
-                            <IconComp className={`w-4 h-4 ${t.color || ''}`} />
+                            <IconComp className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${t.color || ''}`} />
                           </button>
                         );
                       })}
                     </div>
                   )}
 
-                  <div className="text-xs font-semibold text-slate-500 truncate max-w-[160px]">
+                  <div className="hidden sm:block text-xs font-semibold text-slate-500 truncate max-w-[160px]">
                     {files[0]?.name}
                   </div>
                 </div>
 
-                {/* Main Workspace */}
-                <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-12 gap-4 items-stretch">
-                  <div className="lg:col-span-8 bg-slate-100 rounded-3xl border border-slate-200 flex flex-col relative overflow-hidden h-full min-h-0 shadow-inner">
+                {/* Main Workspace Layout */}
+                <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-12 gap-3 sm:gap-4 items-stretch relative">
+                  {/* Left Section: Full Height on Mobile, Clean Fit on Desktop */}
+                  <div className="col-span-1 lg:col-span-8 bg-slate-100 rounded-2xl sm:rounded-3xl border border-slate-200 flex flex-col relative overflow-hidden h-full min-h-0 shadow-inner">
                     {isFormLoading ? (
                       <div className="flex-1 flex flex-col items-center justify-center space-y-3 text-slate-400">
-                        <Loader2 className="w-9 h-9 animate-spin text-rose-500" />
+                        <Loader2 className="w-8 h-8 sm:w-9 sm:h-9 animate-spin text-rose-500" />
                         <p className="text-xs font-semibold">Parsing Form Fields & Rendering...</p>
                       </div>
                     ) : formPageDataUrl ? (
                       <div className="flex-1 min-h-0 flex flex-col relative">
                         <div
                           ref={formViewportScrollRef}
-                          className="flex-1 min-h-0 w-full overflow-auto p-4"
+                          className="flex-1 min-h-0 w-full overflow-auto p-2 sm:p-4"
                         >
                           <div
                             style={{
@@ -1230,7 +1512,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                               display: 'flex',
                               alignItems: isOverflowingY ? 'flex-start' : 'center',
                               justifyContent: isOverflowingX ? 'flex-start' : 'center',
-                              padding: '12px',
+                              padding: '8px',
                               boxSizing: 'border-box'
                             }}
                           >
@@ -1267,6 +1549,10 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                                       onClick={(e) => {
                                         e.stopPropagation();
                                         setSelectedFieldId(field.id);
+                                        // Open bottom sheet on mobile when a field is selected
+                                        if (window.innerWidth < 1024) {
+                                          setIsMobileDrawerOpen(true);
+                                        }
                                       }}
                                       onMouseDown={(e) => handleFieldPointerDown(e, field)}
                                       onTouchStart={(e) => handleFieldPointerDown(e, field)}
@@ -1276,34 +1562,34 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                                         width: `${field.widthPercent}%`,
                                         height: `${field.heightPercent}%`,
                                       }}
-                                      className={`group absolute flex items-center justify-center transition-all bg-white ${
+                                      className={`group absolute flex items-center justify-center transition-all ${
                                         field.type === 'formtext'
                                           ? isSelected
                                             ? 'border border-dashed border-red-500 bg-red-50/20'
                                             : 'border border-transparent hover:border-red-300'
                                           : isSelected
-                                          ? 'border-2 border-blue-500 bg-white shadow-md z-30'
-                                          : 'border border-blue-300/80 bg-white hover:border-blue-400 z-20'
+                                          ? 'border-2 border-blue-500 bg-blue-50/50 shadow-md z-30'
+                                          : 'border border-blue-300/80 bg-blue-50/20 hover:border-blue-400 z-20'
                                       } ${formMode === 'edit' ? 'cursor-move' : 'cursor-pointer'}`}
                                     >
-                                      {/* Left Arrow Field Indicator Badge */}
+                                      {/* Indicator Badge */}
                                       {field.includeIndicator && (
                                         <div
-                                          className="absolute right-full mr-2.5 flex items-center pointer-events-none z-40 select-none drop-shadow-sm"
+                                          className="absolute right-full mr-2 flex items-center pointer-events-none z-40 select-none drop-shadow-sm"
                                           style={{ top: '50%', transform: 'translateY(-50%)' }}
                                         >
-                                          <div className="px-2 py-1 bg-sky-500 text-white font-bold rounded-l-md text-[10px] whitespace-nowrap shadow-xs">
+                                          <div className="px-1.5 py-0.5 bg-sky-500 text-white font-bold rounded-l-md text-[9px] whitespace-nowrap shadow-xs">
                                             {field.indicatorText || 'Sign Here'}
                                           </div>
-                                          <div className="w-0 h-0 border-y-[6px] border-y-transparent border-l-[6px] border-l-sky-500" />
+                                          <div className="w-0 h-0 border-y-[5px] border-y-transparent border-l-[5px] border-l-sky-500" />
                                         </div>
                                       )}
 
-                                      {/* Drag Reposition Handle on hover/select */}
+                                      {/* Move Handle */}
                                       <div
                                         onMouseDown={(e) => handleFieldPointerDown(e, field, null, true)}
                                         onTouchStart={(e) => handleFieldPointerDown(e, field, null, true)}
-                                        className={`absolute -top-3 -right-3 p-1 bg-blue-600 text-white rounded-full shadow cursor-grab active:cursor-grabbing z-40 transition-opacity ${
+                                        className={`absolute -top-2.5 -right-2.5 p-1 bg-blue-600 text-white rounded-full shadow cursor-grab active:cursor-grabbing z-40 transition-opacity ${
                                           isSelected || formMode === 'edit' ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
                                         }`}
                                         title="Drag to reposition"
@@ -1311,7 +1597,6 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                                         <Move className="w-2.5 h-2.5" />
                                       </div>
 
-                                      {/* Static Form Text */}
                                       {field.type === 'formtext' ? (
                                         <div
                                           style={{
@@ -1355,12 +1640,13 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                                           onClick={(e) => {
                                             e.stopPropagation();
                                             setSelectedFieldId(field.id);
+                                            if (window.innerWidth < 1024) setIsMobileDrawerOpen(true);
                                           }}
                                           style={{ fontSize: `${dynamicFontSize}px` }}
                                           className="w-full h-full px-2 flex items-center font-serif italic text-blue-900 truncate cursor-pointer pointer-events-auto"
                                         >
                                           {field.value || (
-                                            <span className="px-2 py-0.5 bg-blue-900 text-white rounded font-sans not-italic text-[11px] font-bold">
+                                            <span className="px-1.5 py-0.5 bg-blue-900 text-white rounded font-sans not-italic text-[10px] font-bold">
                                               Sign here
                                             </span>
                                           )}
@@ -1460,8 +1746,8 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                           </div>
                         </div>
 
-                        {/* Floating Bottom Pagination & Zoom Bar */}
-                        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 bg-slate-900/90 backdrop-blur-md text-white px-3 py-1.5 rounded-2xl flex items-center space-x-2 text-xs shadow-xl z-30">
+                        {/* Floating Bottom Navigation Bar (Responsive on Mobile) */}
+                        <div className="absolute bottom-2.5 left-1/2 -translate-x-1/2 bg-slate-900/90 backdrop-blur-md text-white px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-2xl flex items-center space-x-1.5 sm:space-x-2 text-[11px] sm:text-xs shadow-xl z-30 max-w-[95vw]">
                           <button
                             type="button"
                             onClick={() => setFormCurrentPage((p) => Math.max(1, p - 1))}
@@ -1498,7 +1784,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                           >
                             <ZoomIn className="w-3.5 h-3.5" />
                           </button>
-                          <span className="font-mono text-slate-300 font-semibold text-[11px]">{formZoom}%</span>
+                          <span className="font-mono text-slate-300 font-semibold">{formZoom}%</span>
                           <div className="h-3.5 w-px bg-slate-700" />
                           <button
                             type="button"
@@ -1508,280 +1794,30 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                           >
                             <Maximize className="w-3.5 h-3.5" />
                           </button>
+
+                          {/* Mobile Edit Properties Trigger Button */}
+                          {selectedField && (
+                            <>
+                              <div className="h-3.5 w-px bg-slate-700 lg:hidden" />
+                              <button
+                                type="button"
+                                onClick={() => setIsMobileDrawerOpen(true)}
+                                className="lg:hidden px-2 py-0.5 bg-blue-600 text-white rounded-lg font-bold flex items-center space-x-1"
+                              >
+                                <SlidersVertical className="w-3 h-3" />
+                                <span>Edit</span>
+                              </button>
+                            </>
+                          )}
                         </div>
                       </div>
                     ) : null}
                   </div>
 
-                  {/* Right Section: Properties Sidebar */}
-                  <div className="lg:col-span-4 bg-white border border-slate-200 rounded-3xl p-5 shadow-sm h-full min-h-0 flex flex-col justify-between">
+                  {/* Desktop Right Sidebar (Cleanly hidden on mobile, replaced by bottom sheet) */}
+                  <div className="hidden lg:flex lg:col-span-4 bg-white border border-slate-200 rounded-3xl p-5 shadow-sm h-full min-h-0 flex-col justify-between">
                     <div className="flex-1 min-h-0 overflow-y-auto pr-1">
-                      {selectedField ? (
-                        <div className="space-y-4">
-                          <div className="flex items-center justify-between border-b pb-2.5">
-                            <h3 className="text-sm font-bold text-slate-900 capitalize">
-                              {selectedField.type === 'formtext' ? 'Static Text Annotation' : `${selectedField.type} Field Tool`}
-                            </h3>
-                            <button
-                              type="button"
-                              onClick={() => deleteSelectedField(selectedField.id)}
-                              className="text-xs text-red-500 hover:text-red-700 font-semibold cursor-pointer flex items-center space-x-1"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                              <span>Delete</span>
-                            </button>
-                          </div>
-
-                          {/* Field Name Input */}
-                          <div className="space-y-1">
-                            <label className="text-[11px] font-semibold text-slate-700">
-                              {selectedField.type === 'formtext' ? 'Label Identifier:' : 'Field Name*:'}
-                            </label>
-                            <input
-                              type="text"
-                              value={selectedField.name || ''}
-                              onChange={(e) => updateSelectedField({ name: e.target.value })}
-                              className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-                            />
-                          </div>
-
-                          {/* Text Content for Form Text */}
-                          {selectedField.type === 'formtext' ? (
-                            <div className="space-y-1">
-                              <label className="text-[11px] font-semibold text-slate-700">Text Content:</label>
-                              <input
-                                type="text"
-                                value={selectedField.value || ''}
-                                onChange={(e) => updateSelectedField({ value: e.target.value })}
-                                className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-                              />
-                            </div>
-                          ) : (
-                            /* Default Value for normal fields */
-                            <div className="space-y-1">
-                              <label className="text-[11px] font-semibold text-slate-700">Default Value:</label>
-                              <input
-                                type="text"
-                                value={selectedField.value || ''}
-                                onChange={(e) => updateSelectedField({ value: e.target.value })}
-                                className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-                              />
-                            </div>
-                          )}
-
-                          {/* Dropdown Options */}
-                          {(selectedField.type === 'combobox' || selectedField.type === 'listbox') && (
-                            <div className="space-y-1.5">
-                              <label className="text-[11px] font-semibold text-slate-700">Options</label>
-                              <div className="space-y-1.5 max-h-32 overflow-y-auto pr-1">
-                                {selectedField.options?.map((opt, optIdx) => (
-                                  <div key={optIdx} className="flex items-center space-x-2">
-                                    <input
-                                      type="text"
-                                      value={opt}
-                                      onChange={(e) => {
-                                        const copy = [...selectedField.options];
-                                        copy[optIdx] = e.target.value;
-                                        updateSelectedField({ options: copy });
-                                      }}
-                                      className="flex-1 px-2 py-1 text-xs bg-slate-50 border border-slate-200 rounded-lg"
-                                    />
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        const copy = selectedField.options.filter((_, idx) => idx !== optIdx);
-                                        updateSelectedField({ options: copy });
-                                      }}
-                                      className="text-slate-400 hover:text-red-500 cursor-pointer"
-                                    >
-                                      <Trash2 className="w-3.5 h-3.5" />
-                                    </button>
-                                  </div>
-                                ))}
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  updateSelectedField({
-                                    options: [...(selectedField.options || []), `Option ${selectedField.options.length + 1}`],
-                                  })
-                                }
-                                className="text-[11px] font-bold text-blue-600 hover:text-blue-700 cursor-pointer flex items-center space-x-1"
-                              >
-                                <Plus className="w-3 h-3" />
-                                <span>Add Option</span>
-                              </button>
-                            </div>
-                          )}
-
-                          {/* Properties - Excluded completely for formtext */}
-                          {selectedField.type !== 'formtext' && (
-                            <div className="space-y-2 pt-2 border-t border-slate-100 text-xs">
-                              <label className="font-bold text-slate-800 block mb-1">Properties</label>
-                              <label className="flex items-center space-x-2 cursor-pointer">
-                                <input
-                                  type="checkbox"
-                                  checked={selectedField.readOnly || false}
-                                  onChange={(e) => updateSelectedField({ readOnly: e.target.checked })}
-                                  className="w-3.5 h-3.5 rounded accent-blue-600"
-                                />
-                                <span className="text-slate-700">Read Only</span>
-                              </label>
-                              <label className="flex items-center space-x-2 cursor-pointer">
-                                <input
-                                  type="checkbox"
-                                  checked={selectedField.required || false}
-                                  onChange={(e) => updateSelectedField({ required: e.target.checked })}
-                                  className="w-3.5 h-3.5 rounded accent-blue-600"
-                                />
-                                <span className="text-slate-700">Required</span>
-                              </label>
-                              {selectedField.type === 'text' && (
-                                <label className="flex items-center space-x-2 cursor-pointer">
-                                  <input
-                                    type="checkbox"
-                                    checked={selectedField.multiline || false}
-                                    onChange={(e) => updateSelectedField({ multiline: e.target.checked })}
-                                    className="w-3.5 h-3.5 rounded accent-blue-600"
-                                  />
-                                  <span className="text-slate-700">Multiline</span>
-                                </label>
-                              )}
-                              <label className="flex items-center space-x-2 cursor-pointer">
-                                <input
-                                  type="checkbox"
-                                  checked={selectedField.includeIndicator || false}
-                                  onChange={(e) => updateSelectedField({ includeIndicator: e.target.checked })}
-                                  className="w-3.5 h-3.5 rounded accent-blue-600"
-                                />
-                                <span className="text-slate-700">Include Field Indicator</span>
-                              </label>
-
-                              {/* Indicator Text Sub-field */}
-                              {selectedField.includeIndicator && (
-                                <div className="pl-6 pt-1">
-                                  <input
-                                    type="text"
-                                    placeholder="Sign Here"
-                                    value={selectedField.indicatorText || ''}
-                                    onChange={(e) => updateSelectedField({ indicatorText: e.target.value })}
-                                    className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs"
-                                  />
-                                </div>
-                              )}
-                            </div>
-                          )}
-
-                          {/* Field Size Controls */}
-                          <div className="space-y-1.5 pt-2 border-t border-slate-100 text-xs">
-                            <label className="font-bold text-slate-800 block">Field Size (% of page)</label>
-                            <div className="grid grid-cols-2 gap-2">
-                              <div>
-                                <span className="text-[10px] text-slate-500 block mb-0.5">Width (%)</span>
-                                <input
-                                  type="number"
-                                  min="1"
-                                  max="100"
-                                  step="0.5"
-                                  value={Number((selectedField.widthPercent || 20).toFixed(1))}
-                                  onChange={(e) => updateSelectedField({ widthPercent: Math.max(1, parseFloat(e.target.value) || 1) })}
-                                  className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg font-mono text-center text-xs"
-                                />
-                              </div>
-                              <div>
-                                <span className="text-[10px] text-slate-500 block mb-0.5">Height (%)</span>
-                                <input
-                                  type="number"
-                                  min="1"
-                                  max="100"
-                                  step="0.5"
-                                  value={Number((selectedField.heightPercent || 3).toFixed(1))}
-                                  onChange={(e) => updateSelectedField({ heightPercent: Math.max(1, parseFloat(e.target.value) || 1) })}
-                                  className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg font-mono text-center text-xs"
-                                />
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* Typography and Color Pickers */}
-                          <div className="space-y-1.5 pt-2 border-t border-slate-100 text-xs">
-                            <label className="font-bold text-slate-800 block">Text Formatting</label>
-                            <div className="flex items-center space-x-1.5">
-                              <select
-                                value={selectedField.fontFamily || 'Helvetica'}
-                                onChange={(e) => updateSelectedField({ fontFamily: e.target.value })}
-                                className="px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg flex-1 text-xs"
-                              >
-                                <option value="Helvetica">Arial / Helvetica</option>
-                                <option value="Times">Times New Roman</option>
-                                <option value="Courier">Courier</option>
-                              </select>
-
-                              <select
-                                value={selectedField.fontSize || 11}
-                                onChange={(e) => updateSelectedField({ fontSize: parseInt(e.target.value, 10) })}
-                                className="w-12 px-1 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs"
-                              >
-                                {[9, 10, 11, 12, 14, 16, 18].map((sz) => (
-                                  <option key={sz} value={sz}>{sz}px</option>
-                                ))}
-                              </select>
-
-                              <div className="flex items-center border border-slate-200 rounded-lg p-0.5 bg-slate-50">
-                                <button
-                                  type="button"
-                                  onClick={() => updateSelectedField({ isBold: !selectedField.isBold })}
-                                  className={`px-1.5 py-0.5 font-bold text-xs rounded cursor-pointer ${selectedField.isBold ? 'bg-blue-600 text-white' : 'text-slate-600'}`}
-                                >
-                                  B
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => updateSelectedField({ isItalic: !selectedField.isItalic })}
-                                  className={`px-1.5 py-0.5 italic text-xs rounded cursor-pointer ${selectedField.isItalic ? 'bg-blue-600 text-white' : 'text-slate-600'}`}
-                                >
-                                  I
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => updateSelectedField({ isUnderline: !selectedField.isUnderline })}
-                                  className={`px-1.5 py-0.5 underline text-xs rounded cursor-pointer ${selectedField.isUnderline ? 'bg-blue-600 text-white' : 'text-slate-600'}`}
-                                >
-                                  U
-                                </button>
-                              </div>
-                            </div>
-
-                            <div className="pt-1.5 flex items-center space-x-2">
-                              {['#000000', '#1E40AF', '#DC2626', '#16A34A', '#D97706', '#9333EA'].map((col) => (
-                                <button
-                                  key={col}
-                                  type="button"
-                                  onClick={() => updateSelectedField({ color: col })}
-                                  style={{ backgroundColor: col }}
-                                  className={`w-5 h-5 rounded-full border cursor-pointer transition ${
-                                    selectedField.color === col ? 'ring-2 ring-blue-500 scale-110 border-white' : 'border-slate-200'
-                                  }`}
-                                />
-                              ))}
-                            </div>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="text-center py-10 space-y-3">
-                          <FileText className="w-12 h-12 text-slate-300 mx-auto" />
-                          <div>
-                            <h4 className="text-xs font-bold text-slate-800">
-                              {formFields.length === 0 ? 'This document has no form fields' : 'Form Field List'}
-                            </h4>
-                            <p className="text-[11px] text-slate-400 mt-1 max-w-[200px] mx-auto leading-relaxed">
-                              {formMode === 'edit'
-                                ? 'Click anywhere on the PDF page to add inputs.'
-                                : 'Switch to Edit Form mode to add fields, or fill inputs directly.'}
-                            </p>
-                          </div>
-                        </div>
-                      )}
+                      {renderFieldPropertiesContent()}
                     </div>
 
                     <button
@@ -1804,6 +1840,36 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                       )}
                     </button>
                   </div>
+
+                  {/* Mobile Slide-Up Drawer / Bottom Sheet */}
+                  {isMobileDrawerOpen && (
+                    <div className="lg:hidden fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex flex-col justify-end animate-in fade-in duration-150">
+                      <div className="bg-white rounded-t-3xl p-4 shadow-2xl border-t border-slate-200 max-h-[75vh] flex flex-col space-y-3">
+                        <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                          <div className="w-10 h-1 bg-slate-300 rounded-full mx-auto" />
+                          <button
+                            type="button"
+                            onClick={() => setIsMobileDrawerOpen(false)}
+                            className="p-1 rounded-full text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+                          >
+                            <CloseIcon className="w-5 h-5" />
+                          </button>
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto pr-1">
+                          {renderFieldPropertiesContent()}
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => setIsMobileDrawerOpen(false)}
+                          className="w-full py-3 bg-slate-900 text-white rounded-xl font-bold text-xs shadow-sm"
+                        >
+                          Done Editing
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
