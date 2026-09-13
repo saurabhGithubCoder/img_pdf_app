@@ -1,6 +1,7 @@
 import { PDFDocument, degrees, rgb, StandardFonts } from 'pdf-lib';
 import * as pdfjsLib from 'pdfjs-dist';
 import JSZip from 'jszip';
+import { createWorker } from 'tesseract.js';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
 
@@ -2009,6 +2010,161 @@ export async function savePdfForms(file, formFields) {
   return {
     blob: new Blob([pdfBytes], { type: 'application/pdf' }),
     filename: `filled_${file.name}`,
+    originalSize: file.size,
+    compressedSize: pdfBytes.byteLength
+  };
+}
+
+/**
+ * Genuine In-Browser WebAssembly OCR Engine with Granular Real-Time Progress Tracking.
+ * Hooked into Tesseract's internal recognition logger for smooth, uninterrupted progress updates.
+ *
+ * @param {File} file - Scanned PDF file
+ * @param {Object} options - { language: 'eng', onProgress: Function, outputMode: 'searchable_pdf' | 'text' }
+ */
+export async function performPdfOcr(file, options = {}) {
+  const {
+    language = 'eng',
+    onProgress = () => {},
+    outputMode = 'searchable_pdf'
+  } = options;
+
+  const isLocked = await checkPdfPassword(file);
+  if (isLocked) {
+    const err = new Error(`"${file.name}" is password-protected.`);
+    err.lockedFiles = [file.name];
+    throw err;
+  }
+
+  const arrayBuffer = await file.arrayBuffer();
+  const pdfJsDoc = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  const totalPages = pdfJsDoc.numPages;
+
+  let currentPageNum = 1;
+
+  onProgress({ status: 'Loading OCR Engine & Models...', percent: 5 });
+
+  // Step 1: Hook Tesseract's real-time logger for granular sub-page progress updates
+  const worker = await createWorker(language, 1, {
+    logger: (m) => {
+      if (m && m.status === 'recognizing text' && typeof m.progress === 'number') {
+        // Calculate dynamic sub-page percentage
+        const pagePortion = 90 / totalPages;
+        const basePagePercent = 5 + (currentPageNum - 1) * pagePortion;
+        const currentSubPercent = Math.round(basePagePercent + m.progress * pagePortion);
+
+        onProgress({
+          status: `Scanning Page ${currentPageNum} of ${totalPages} (${Math.round(m.progress * 100)}%)...`,
+          percent: Math.min(95, currentSubPercent)
+        });
+      } else if (m && m.status && m.status.includes('loading')) {
+        onProgress({
+          status: `Loading language data (${m.status})...`,
+          percent: 8
+        });
+      }
+    }
+  });
+
+  const outputPdfDoc = await PDFDocument.create();
+  const helveticaFont = await outputPdfDoc.embedFont(StandardFonts.Helvetica);
+  let extractedFullText = '';
+
+  try {
+    for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
+      currentPageNum = pageNum;
+
+      onProgress({
+        status: `Rendering Page ${pageNum} of ${totalPages}...`,
+        percent: Math.round(5 + ((pageNum - 1) / totalPages) * 90)
+      });
+
+      const page = await pdfJsDoc.getPage(pageNum);
+      const viewport = page.getViewport({ scale: 2.0 });
+
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+
+      await page.render({ canvasContext: ctx, viewport }).promise;
+
+      // Real-time recognition runs here; logger will stream granular progress updates automatically
+      const { data } = await worker.recognize(canvas);
+      extractedFullText += `--- Page ${pageNum} ---\n` + (data.text || '') + '\n\n';
+
+      if (outputMode === 'searchable_pdf') {
+        const imgDataUrl = canvas.toDataURL('image/jpeg', 0.88);
+        const imgBytes = await (await fetch(imgDataUrl)).arrayBuffer();
+        const embeddedImg = await outputPdfDoc.embedJpg(imgBytes);
+
+        const pdfPageW = viewport.width / 2.0;
+        const pdfPageH = viewport.height / 2.0;
+        const newPage = outputPdfDoc.addPage([pdfPageW, pdfPageH]);
+
+        newPage.drawImage(embeddedImg, {
+          x: 0,
+          y: 0,
+          width: pdfPageW,
+          height: pdfPageH,
+        });
+
+        // Stamp selectable text layer over coordinates
+        if (data.words && data.words.length > 0) {
+          const scaleX = pdfPageW / canvas.width;
+          const scaleY = pdfPageH / canvas.height;
+
+          for (const w of data.words) {
+            const wordText = (w.text || '').trim();
+            if (!wordText) continue;
+
+            const bbox = w.bbox;
+            const wordX = bbox.x0 * scaleX;
+            const wordWidth = Math.max(4, (bbox.x1 - bbox.x0) * scaleX);
+            const wordHeight = Math.max(6, (bbox.y1 - bbox.y0) * scaleY);
+            const wordY = pdfPageH - (bbox.y1 * scaleY);
+
+            try {
+              newPage.drawText(wordText, {
+                x: wordX,
+                y: wordY,
+                size: Math.max(5, Math.min(wordHeight * 0.9, 36)),
+                font: helveticaFont,
+                color: rgb(0, 0, 0),
+                opacity: 0,
+                maxWidth: wordWidth + 4
+              });
+            } catch (_) {
+              // Ignore unsupported character glyph exceptions safely
+            }
+          }
+        }
+      }
+    }
+  } finally {
+    await worker.terminate();
+  }
+
+  onProgress({ status: 'Finalizing PDF...', percent: 98 });
+
+  const baseName = file.name.replace(/\.[^/.]+$/, '');
+
+  if (outputMode === 'text') {
+    onProgress({ status: 'Done!', percent: 100 });
+    return {
+      blob: new Blob([extractedFullText], { type: 'text/plain;charset=utf-8' }),
+      filename: `${baseName}_ocr.txt`,
+      originalSize: file.size,
+      compressedSize: extractedFullText.length
+    };
+  }
+
+  const pdfBytes = await outputPdfDoc.save({ useObjectStreams: true });
+  onProgress({ status: 'Done!', percent: 100 });
+
+  return {
+    blob: new Blob([pdfBytes], { type: 'application/pdf' }),
+    filename: `${baseName}_searchable.pdf`,
     originalSize: file.size,
     compressedSize: pdfBytes.byteLength
   };

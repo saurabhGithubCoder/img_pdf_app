@@ -49,7 +49,7 @@ export const PDF_CATEGORIES = [
     tools: [
       { id: 'compress', name: 'Compress PDF', desc: 'Reduce file size while preserving document quality.', icon: Minimize2, color: 'text-emerald-500', bg: 'bg-emerald-50' },
       { id: 'repair', name: 'Repair PDF', desc: 'Recover damaged and corrupted PDF files.', icon: Wrench, color: 'text-green-600', bg: 'bg-green-50', inactive: true, badge: 'Coming Soon' },
-      { id: 'ocr', name: 'OCR PDF', desc: 'Make scanned documents searchable and selectable.', icon: ScanText, color: 'text-teal-600', bg: 'bg-teal-50', inactive: true, badge: 'Coming Soon' },
+      { id: 'ocr', name: 'OCR PDF', desc: 'Make scanned documents searchable and selectable.', icon: ScanText, color: 'text-teal-600', bg: 'bg-teal-50' },
     ],
   },
   {

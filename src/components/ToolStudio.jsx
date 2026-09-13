@@ -51,7 +51,8 @@ import {
   AlignLeft,
   Move,
   X as CloseIcon,
-  SlidersVertical
+  SlidersVertical,
+  ScanText
 } from 'lucide-react';
 import {
   mergePDFs,
@@ -83,7 +84,8 @@ import {
   checkPptxPassword,
   checkExcelPassword,
   extractPdfFormFields,
-  savePdfForms
+  savePdfForms,
+  performPdfOcr
 } from '../utils/pdfWorker';
 
 export default function ToolStudio({ tool, initialFiles, initialImageCards, initialHtmlCode, initialHtmlMode, onBack }) {
@@ -107,18 +109,31 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
     return 'application/pdf';
   }
 
+  // Compression tool settings
   const [compressionPercent, setCompressionPercent] = useState(45);
+
+  // OCR Tool Settings
+  const [ocrLanguage, setOcrLanguage] = useState('eng');
+  const [ocrOutputMode, setOcrOutputMode] = useState('searchable_pdf'); // 'searchable_pdf' | 'text'
+  const [ocrProgress, setOcrProgress] = useState({ status: '', percent: 0 });
+
+  // Password Protection State
   const [protectPassword, setProtectPassword] = useState('');
   const [repeatPassword, setRepeatPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [showRepeatPassword, setShowRepeatPassword] = useState(false);
+
+  // Unlock PDF Options State
   const [unlockMode, setUnlockMode] = useState('without-password');
   const [unlockPassword, setUnlockPassword] = useState('');
   const [showUnlockPassword, setShowUnlockPassword] = useState(false);
+
+  // Merge PDF visual thumbnail cards & drag state
   const [mergeCards, setMergeCards] = useState([]);
   const [draggedMergeIndex, setDraggedMergeIndex] = useState(null);
   const [isLoadingMergePreviews, setIsLoadingMergePreviews] = useState(false);
 
+  // Page-selector & Visual tools
   const isPageLevelTool =
     tool?.id === 'remove' ||
     tool?.id === 'extract' ||
@@ -137,6 +152,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
   const [draggedPageIndex, setDraggedPageIndex] = useState(null);
   const [draggedImageIndex, setDraggedImageIndex] = useState(null);
 
+  // Image to PDF Options State
   const [imageToPdfOptions, setImageToPdfOptions] = useState({
     orientation: 'portrait',
     pageSize: 'a4',
@@ -144,6 +160,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
     mergeAll: true,
   });
 
+  // Add Page Numbers Options State
   const [pageNumberOptions, setPageNumberOptions] = useState({
     pageMode: 'single',
     position: 'top-right',
@@ -161,6 +178,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
     color: '#334155'
   });
 
+  // Add Watermark Options State
   const [watermarkOptions, setWatermarkOptions] = useState({
     type: 'text',
     text: 'CONFIDENTIAL',
@@ -323,7 +341,6 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
   const formViewportScrollRef = useRef(null);
   const formFieldDragRef = useRef({ isDragging: false, isResizing: false, handle: null, fieldId: null, startX: 0, startY: 0, initialPercent: null });
 
-  // Measure form viewport dynamically
   useEffect(() => {
     if (!formViewportScrollRef.current) return;
     const observer = new ResizeObserver((entries) => {
@@ -545,7 +562,6 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
     window.removeEventListener('touchend', handleFieldPointerUp);
   };
 
-  // Compute exact pixel dimensions matching PDF aspect ratio without letterboxing
   const availW = Math.max(100, formViewportSize.width - 24);
   const availH = Math.max(100, formViewportSize.height - 24);
   const pageW = formPageDimensions.width || 595;
@@ -920,6 +936,13 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
     try {
       let output;
       switch (tool?.id) {
+        case 'ocr':
+          output = await performPdfOcr(files[0], {
+            language: ocrLanguage,
+            outputMode: ocrOutputMode,
+            onProgress: (prog) => setOcrProgress(prog)
+          });
+          break;
         case 'forms':
           output = await savePdfForms(files[0], formFields);
           break;
@@ -1107,7 +1130,6 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
     );
   };
 
-  // Reusable Field Properties Panel
   const renderFieldPropertiesContent = () => (
     <>
       {selectedField ? (
@@ -1402,7 +1424,6 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
             </h2>
           </div>
 
-          {/* Quick Mobile Download Button */}
           {isFormsStudio ? (
             <button
               onClick={executeAction}
@@ -1427,10 +1448,104 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
 
         {!result ? (
           <div className={`${isFormsStudio ? 'flex-1 min-h-0 flex flex-col' : 'space-y-6'}`}>
+            {/* OCR PDF Studio (Searchable PDF & Plain Text) */}
+            {tool?.id === 'ocr' && (
+              <div className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-8 max-w-xl mx-auto space-y-6 shadow-sm">
+                <div className="text-center space-y-2">
+                  <div className="w-12 h-12 rounded-2xl bg-teal-50 text-teal-600 flex items-center justify-center mx-auto shadow-xs">
+                    <ScanText className="w-6 h-6" />
+                  </div>
+                  <h3 className="text-xl font-black text-slate-900">Make PDF Searchable (OCR)</h3>
+                  <p className="text-xs text-slate-500">
+                    Client-side WASM engine. Your files are processed locally and never uploaded to any server.
+                  </p>
+                </div>
+
+                {files[0] && renderSingleFileThumbnailCard(files[0])}
+
+                <div className="space-y-4 pt-2 border-t border-slate-100 text-xs">
+                  <div>
+                    <label className="font-bold text-slate-800 block mb-1.5">Document Language</label>
+                    <select
+                      value={ocrLanguage}
+                      onChange={(e) => setOcrLanguage(e.target.value)}
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-medium focus:outline-none focus:ring-2 focus:ring-teal-500/20"
+                    >
+                      <option value="eng">English</option>
+                      <option value="hin">Hindi (हिन्दी)</option>
+                      <option value="spa">Spanish (Español)</option>
+                      <option value="fra">French (Français)</option>
+                      <option value="deu">German (Deutsch)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="font-bold text-slate-800 block mb-1.5">Output Format</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setOcrOutputMode('searchable_pdf')}
+                        className={`p-3 rounded-xl border text-center transition cursor-pointer font-bold ${
+                          ocrOutputMode === 'searchable_pdf'
+                            ? 'border-teal-500 bg-teal-50 text-teal-700 shadow-xs'
+                            : 'border-slate-200 bg-white text-slate-600'
+                        }`}
+                      >
+                        Searchable PDF
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setOcrOutputMode('text')}
+                        className={`p-3 rounded-xl border text-center transition cursor-pointer font-bold ${
+                          ocrOutputMode === 'text'
+                            ? 'border-teal-500 bg-teal-50 text-teal-700 shadow-xs'
+                            : 'border-slate-200 bg-white text-slate-600'
+                        }`}
+                      >
+                        Extract Text (.txt)
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {isProcessing && (
+                  <div className="p-4 bg-teal-50/70 border border-teal-200 rounded-2xl space-y-2 text-xs">
+                    <div className="flex justify-between font-bold text-teal-900">
+                      <span>{ocrProgress.status || 'Scanning text...'}</span>
+                      <span>{ocrProgress.percent}%</span>
+                    </div>
+                    <div className="w-full bg-teal-200/50 rounded-full h-2 overflow-hidden">
+                      <div
+                        className="bg-teal-600 h-2 rounded-full transition-all duration-300"
+                        style={{ width: `${ocrProgress.percent}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                <button
+                  onClick={executeAction}
+                  disabled={isProcessing}
+                  className="w-full py-4 bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white font-bold rounded-2xl shadow-md transition flex items-center justify-center space-x-2 cursor-pointer"
+                >
+                  {isProcessing ? (
+                    <div className="flex items-center space-x-2">
+                      <Loader2 className="w-4 h-4 animate-spin text-white" />
+                      <span>Processing OCR In-Browser...</span>
+                    </div>
+                  ) : (
+                    <>
+                      <span>Start OCR Recognition</span>
+                      <ArrowRight className="w-4 h-4" />
+                    </>
+                  )}
+                </button>
+              </div>
+            )}
+
             {/* PDF Forms Studio */}
             {tool?.id === 'forms' && (
               <div className="flex-1 min-h-0 flex flex-col space-y-2 sm:space-y-3">
-                {/* Top Control Bar - Clean Single Line with Mobile Scroll */}
                 <div className="bg-white border border-slate-200 rounded-2xl px-2 sm:px-3 py-1.5 sm:py-2 flex items-center justify-between gap-2 shadow-xs shrink-0 overflow-x-auto no-scrollbar">
                   <div className="flex items-center space-x-1.5 p-0.5 sm:p-1 bg-slate-100 rounded-xl shrink-0">
                     <button
@@ -1490,9 +1605,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                   </div>
                 </div>
 
-                {/* Main Workspace Layout */}
                 <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-12 gap-3 sm:gap-4 items-stretch relative">
-                  {/* Left Section: Full Height on Mobile, Clean Fit on Desktop */}
                   <div className="col-span-1 lg:col-span-8 bg-slate-100 rounded-2xl sm:rounded-3xl border border-slate-200 flex flex-col relative overflow-hidden h-full min-h-0 shadow-inner">
                     {isFormLoading ? (
                       <div className="flex-1 flex flex-col items-center justify-center space-y-3 text-slate-400">
@@ -1536,7 +1649,6 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                                 draggable={false}
                               />
 
-                              {/* Form Field Elements */}
                               {formFields
                                 .filter((f) => f.page === formCurrentPage)
                                 .map((field) => {
@@ -1549,7 +1661,6 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                                       onClick={(e) => {
                                         e.stopPropagation();
                                         setSelectedFieldId(field.id);
-                                        // Open bottom sheet on mobile when a field is selected
                                         if (window.innerWidth < 1024) {
                                           setIsMobileDrawerOpen(true);
                                         }
@@ -1572,7 +1683,6 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                                           : 'border border-blue-300/80 bg-blue-50/20 hover:border-blue-400 z-20'
                                       } ${formMode === 'edit' ? 'cursor-move' : 'cursor-pointer'}`}
                                     >
-                                      {/* Indicator Badge */}
                                       {field.includeIndicator && (
                                         <div
                                           className="absolute right-full mr-2 flex items-center pointer-events-none z-40 select-none drop-shadow-sm"
@@ -1585,7 +1695,6 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                                         </div>
                                       )}
 
-                                      {/* Move Handle */}
                                       <div
                                         onMouseDown={(e) => handleFieldPointerDown(e, field, null, true)}
                                         onTouchStart={(e) => handleFieldPointerDown(e, field, null, true)}
@@ -1718,7 +1827,6 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                                         />
                                       )}
 
-                                      {/* Resize Handles */}
                                       {isSelected && (
                                         <>
                                           {['nw', 'ne', 'sw', 'se'].map((h) => {
@@ -1746,7 +1854,6 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                           </div>
                         </div>
 
-                        {/* Floating Bottom Navigation Bar (Responsive on Mobile) */}
                         <div className="absolute bottom-2.5 left-1/2 -translate-x-1/2 bg-slate-900/90 backdrop-blur-md text-white px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-2xl flex items-center space-x-1.5 sm:space-x-2 text-[11px] sm:text-xs shadow-xl z-30 max-w-[95vw]">
                           <button
                             type="button"
@@ -1795,7 +1902,6 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                             <Maximize className="w-3.5 h-3.5" />
                           </button>
 
-                          {/* Mobile Edit Properties Trigger Button */}
                           {selectedField && (
                             <>
                               <div className="h-3.5 w-px bg-slate-700 lg:hidden" />
@@ -1814,7 +1920,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                     ) : null}
                   </div>
 
-                  {/* Desktop Right Sidebar (Cleanly hidden on mobile, replaced by bottom sheet) */}
+                  {/* Desktop Right Sidebar */}
                   <div className="hidden lg:flex lg:col-span-4 bg-white border border-slate-200 rounded-3xl p-5 shadow-sm h-full min-h-0 flex-col justify-between">
                     <div className="flex-1 min-h-0 overflow-y-auto pr-1">
                       {renderFieldPropertiesContent()}
@@ -2370,7 +2476,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                         onClick={() => setImageToPdfOptions({ ...imageToPdfOptions, orientation: 'landscape' })}
                         className={`p-3 rounded-2xl border text-center flex flex-col items-center justify-center space-y-1.5 transition cursor-pointer ${
                           imageToPdfOptions.orientation === 'landscape'
-                            ? 'border-rose-500 bg-rose-50 text-rose-700 font-bold ring-2 ring-rose-500/20'
+                            ? 'border-rose-500 bg-rose-50/50 text-rose-700 font-bold ring-2 ring-rose-500/20'
                             : 'border-slate-200 bg-white text-slate-600'
                         }`}
                       >
