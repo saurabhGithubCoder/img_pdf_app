@@ -1,9 +1,9 @@
 """
 In-place PDF text editing engine powered by PyMuPDF.
 
-Takes a PDF + a JSON list of edits (one per text span) and produces a new PDF
-where the specified spans are replaced while preserving position, font family,
-weight, italic, size, and color as closely as PDF Base-14 fonts allow.
+Supports per-span overrides for font family, weight, italic, underline, size,
+color, and offset (move). Redacts at the ORIGINAL position, inserts at the
+offset position, and draws an underline when requested.
 """
 import sys
 import os
@@ -17,17 +17,15 @@ def resolve_font_code(font_name):
     is_bold = any(k in name for k in ('bold', 'black', 'heavy', 'semibold', 'demibold'))
     is_italic = any(k in name for k in ('italic', 'oblique'))
 
-    # Times / Serif family
     if any(k in name for k in ('times', 'serif', 'roman', 'georgia', 'garamond', 'book')):
         if is_bold and is_italic:
-            return 'tibi'      # Times-BoldItalic
+            return 'tibi'
         if is_bold:
-            return 'tibo'      # Times-Bold
+            return 'tibo'
         if is_italic:
-            return 'tiit'      # Times-Italic
-        return 'tiro'          # Times-Roman
+            return 'tiit'
+        return 'tiro'
 
-    # Courier / Mono family
     if any(k in name for k in ('courier', 'mono', 'consol')):
         if is_bold and is_italic:
             return 'cobi'
@@ -37,13 +35,11 @@ def resolve_font_code(font_name):
             return 'coit'
         return 'cour'
 
-    # Symbol / Dingbats
     if 'symbol' in name:
         return 'symb'
     if 'zapf' in name or 'dingbat' in name:
         return 'zadb'
 
-    # Default: Helvetica / Arial family
     if is_bold and is_italic:
         return 'hebi'
     if is_bold:
@@ -54,7 +50,7 @@ def resolve_font_code(font_name):
 
 
 def to_color_tuple(color):
-    """Normalize RGB color input (list of 0-1 floats, or #RRGGBB string)."""
+    """Normalize RGB color input."""
     if isinstance(color, (list, tuple)) and len(color) >= 3:
         try:
             return tuple(max(0.0, min(1.0, float(c))) for c in color[:3])
@@ -73,7 +69,6 @@ def to_color_tuple(color):
 def perform_edits(input_path, output_path, edits):
     doc = fitz.open(input_path)
 
-    # Group edits by page
     by_page = {}
     for e in edits:
         try:
@@ -87,10 +82,7 @@ def perform_edits(input_path, output_path, edits):
             continue
         page = doc[page_num - 1]
 
-        # -----------------------------------------------------------------
-        # Step 1: Redact every old text span on this page
-        # White fill (or provided bg color) hides the original glyphs.
-        # -----------------------------------------------------------------
+        # ---- STEP 1: Redact at ORIGINAL position ----
         for e in page_edits:
             bbox = e.get('bbox')
             if not bbox or len(bbox) != 4:
@@ -102,8 +94,8 @@ def perform_edits(input_path, output_path, edits):
             if y1 < y0:
                 y0, y1 = y1, y0
 
-            # Small padding to swallow anti-aliased edges of the old glyphs
-            rect = fitz.Rect(x0 - 0.5, y0 - 1.0, x1 + 1.0, y1 + 0.5)
+            # Small padding to swallow anti-aliased edges
+            rect = fitz.Rect(x0 - 1.0, y0 - 1.5, x1 + 1.5, y1 + 1.0)
 
             bg = to_color_tuple(e.get('bgColor', [1.0, 1.0, 1.0]))
             try:
@@ -113,21 +105,18 @@ def perform_edits(input_path, output_path, edits):
 
         if page_edits:
             try:
-                # images=NONE  → don't erase images beneath text
                 page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
             except Exception:
                 pass
 
-        # -----------------------------------------------------------------
-        # Step 2: Insert the new text with matching style
-        # -----------------------------------------------------------------
+        # ---- STEP 2: Insert new text with offset + style ----
         for e in page_edits:
             new_text = e.get('newText')
             if new_text is None:
                 continue
             new_text = str(new_text)
             if new_text.strip() == '':
-                continue  # user deleted the text — redaction alone suffices
+                continue  # deletion — redaction alone suffices
 
             bbox = e.get('bbox')
             if not bbox or len(bbox) != 4:
@@ -137,6 +126,14 @@ def perform_edits(input_path, output_path, edits):
                 x0, x1 = x1, x0
             if y1 < y0:
                 y0, y1 = y1, y0
+
+            offset_x = float(e.get('offsetX', 0) or 0)
+            offset_y = float(e.get('offsetY', 0) or 0)
+
+            ins_x0 = x0 + offset_x
+            ins_y0 = y0 + offset_y
+            ins_x1 = x1 + offset_x
+            ins_y1 = y1 + offset_y
 
             font_size = float(e.get('fontSize', 11.0))
             if font_size <= 0:
@@ -147,18 +144,17 @@ def perform_edits(input_path, output_path, edits):
 
             font_code = resolve_font_code(font_name)
 
-            # Baseline approx: bottom of bbox minus a fraction of font size.
-            # Most fonts put the baseline ~0.2 * size above bbox bottom.
-            baseline_y = y1 - 0.2 * font_size
-            point = fitz.Point(x0, baseline_y)
+            baseline_y = ins_y1 - 0.2 * font_size
+            point = fitz.Point(ins_x0, baseline_y)
 
             drawn = False
 
-            # For right/center alignment use textbox
-            if align in ('right', 'center') and (x1 - x0) > 5:
+            if align in ('right', 'center') and (ins_x1 - ins_x0) > 5:
                 try:
-                    rect = fitz.Rect(x0, y0, x1, y1)
-                    align_enum = fitz.TEXT_ALIGN_RIGHT if align == 'right' else fitz.TEXT_ALIGN_CENTER
+                    rect = fitz.Rect(ins_x0, ins_y0, ins_x1, ins_y1)
+                    align_enum = (
+                        fitz.TEXT_ALIGN_RIGHT if align == 'right' else fitz.TEXT_ALIGN_CENTER
+                    )
                     page.insert_textbox(
                         rect,
                         new_text,
@@ -171,7 +167,6 @@ def perform_edits(input_path, output_path, edits):
                 except Exception:
                     drawn = False
 
-            # Default: plain insert_text
             if not drawn:
                 try:
                     page.insert_text(
@@ -183,7 +178,6 @@ def perform_edits(input_path, output_path, edits):
                         render_mode=0,
                     )
                 except Exception:
-                    # Last-resort fallback: Helvetica
                     try:
                         page.insert_text(
                             point,
@@ -196,13 +190,31 @@ def perform_edits(input_path, output_path, edits):
                     except Exception:
                         pass
 
+            # ---- Underline ----
+            if e.get('underline'):
+                try:
+                    text_w = fitz.get_text_length(
+                        new_text, fontname=font_code, fontsize=font_size
+                    )
+                    underline_y = baseline_y + font_size * 0.15
+                    page.draw_line(
+                        fitz.Point(point.x, underline_y),
+                        fitz.Point(point.x + text_w, underline_y),
+                        color=color,
+                        width=max(0.5, font_size * 0.05),
+                    )
+                except Exception:
+                    pass
+
     doc.save(output_path, garbage=4, deflate=True, clean=True)
     doc.close()
 
 
 if __name__ == '__main__':
     if len(sys.argv) < 4:
-        sys.stderr.write("Usage: python convert_edit_pdf.py <input.pdf> <output.pdf> <edits.json>\n")
+        sys.stderr.write(
+            "Usage: python convert_edit_pdf.py <input.pdf> <output.pdf> <edits.json>\n"
+        )
         sys.exit(1)
 
     try:
