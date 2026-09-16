@@ -87,6 +87,7 @@ import {
   savePdfForms,
   performPdfOcr
 } from '../utils/pdfWorker';
+import EditPdfStudio from './EditPdfStudio';
 
 export default function ToolStudio({ tool, initialFiles, initialImageCards, initialHtmlCode, initialHtmlMode, onBack }) {
   const [files, setFiles] = useState(initialFiles || []);
@@ -1394,6 +1395,17 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
   );
 
   const isFormsStudio = tool?.id === 'forms' && !result;
+
+    // --- Edit PDF uses its own dedicated studio ---
+  if (tool?.id === 'edit') {
+    return (
+      <EditPdfStudio
+        tool={tool}
+        file={files[0]}
+        onBack={onBack}
+      />
+    );
+  }
 
   return (
     <div className={`bg-slate-50 text-slate-800 ${isFormsStudio ? 'h-screen overflow-hidden flex flex-col' : 'min-h-screen pb-20'}`}>

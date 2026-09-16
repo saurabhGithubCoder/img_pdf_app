@@ -864,6 +864,65 @@ app.post('/api/convert/pdf-to-markdown', upload.single('file'), async (req, res)
   }
 });
 
+// ---------------------------------------------------------
+// Edit PDF Text (in-place span-level editing via PyMuPDF)
+// ---------------------------------------------------------
+app.post('/api/edit-pdf', upload.single('file'), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'No PDF file uploaded.' });
+  }
+
+  const tempId = `edit_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+  const tempDir = path.join(os.tmpdir(), tempId);
+  const inputPdfPath = path.join(tempDir, 'input.pdf');
+  const outputPdfPath = path.join(tempDir, 'output.pdf');
+  const editsPath = path.join(tempDir, 'edits.json');
+  const pythonScriptPath = path.join(__dirname, 'convert_edit_pdf.py');
+
+  try {
+    await fs.mkdir(tempDir, { recursive: true });
+    await fs.writeFile(inputPdfPath, req.file.buffer);
+
+    let edits = [];
+    try {
+      edits = JSON.parse(req.body.edits || '[]');
+    } catch {
+      return res.status(400).json({ error: 'Invalid edits payload.' });
+    }
+
+    if (!Array.isArray(edits) || edits.length === 0) {
+      return res.status(400).json({ error: 'No text edits provided.' });
+    }
+
+    await fs.writeFile(editsPath, JSON.stringify(edits), 'utf-8');
+
+    await new Promise((resolve, reject) => {
+      const py = spawn('python3', [pythonScriptPath, inputPdfPath, outputPdfPath, editsPath]);
+      let stderr = '';
+      py.stderr.on('data', (d) => (stderr += d.toString()));
+      py.on('close', (code) => {
+        if (code === 0) resolve();
+        else reject(new Error(`edit_pdf failed with code ${code}: ${stderr}`));
+      });
+      py.on('error', (err) => reject(err));
+    });
+
+    const pdfBuffer = await fs.readFile(outputPdfPath);
+    const originalName = req.file.originalname.replace(/\.[^/.]+$/, '');
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${originalName}_edited.pdf"`);
+    res.setHeader('x-original-size', req.file.size.toString());
+    res.setHeader('x-edited-size', pdfBuffer.length.toString());
+    return res.send(pdfBuffer);
+  } catch (error) {
+    console.error('PDF text edit error:', error);
+    return res.status(500).json({ error: error.message || 'Failed to edit PDF text.' });
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`Conversion server running on port ${PORT}`);

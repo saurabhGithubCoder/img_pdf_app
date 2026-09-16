@@ -2169,3 +2169,60 @@ export async function performPdfOcr(file, options = {}) {
     compressedSize: pdfBytes.byteLength
   };
 }
+
+/**
+ * Edit PDF text in place. Sends a batch of text-span edits to the backend,
+ * which redacts the original glyphs and re-inserts new text preserving
+ * position, font family, size, weight, italic and color.
+ *
+ * @param {File} file - Original PDF
+ * @param {Array} edits - Array of edit descriptors:
+ *   {
+ *     page: number,                    // 1-based
+ *     bbox: [x0, y0, x1, y1],          // PDF points, top-left origin
+ *     originalText: string,
+ *     newText: string,
+ *     fontName: string,                // e.g. "ABCDEF+Arial-BoldMT"
+ *     fontSize: number,
+ *     color: [r, g, b],                // 0..1 floats
+ *     align: 'left'|'center'|'right'
+ *   }
+ * @returns {Promise<{ blob: Blob, filename: string, originalSize: number, compressedSize: number }>}
+ */
+export async function editPdfText(file, edits) {
+  const isLocked = await checkPdfPassword(file);
+  if (isLocked) {
+    const err = new Error(`Cannot process: "${file.name}" is password-protected.`);
+    err.lockedFiles = [file.name];
+    throw err;
+  }
+
+  if (!Array.isArray(edits) || edits.length === 0) {
+    throw new Error('No text edits provided.');
+  }
+
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('edits', JSON.stringify(edits));
+
+  //const response = await fetch(`${API_BASE_URL}/api/edit-pdf`, {
+  const response = await fetch('/api/edit-pdf', {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.error || 'Server failed to edit PDF text.');
+  }
+
+  const pdfBlob = await response.blob();
+  const baseName = file.name.replace(/\.[^/.]+$/, '');
+
+  return {
+    blob: pdfBlob,
+    filename: `${baseName}_edited.pdf`,
+    originalSize: file.size,
+    compressedSize: pdfBlob.size,
+  };
+}
