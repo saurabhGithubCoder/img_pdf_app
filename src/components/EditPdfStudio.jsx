@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { flushSync } from 'react-dom';
 import {
   ArrowLeft,
   Loader2,
@@ -32,7 +33,7 @@ if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
 }
 
 // ---------------------------------------------------------------------------
-// Color palette for the toolbar
+// Color palette
 // ---------------------------------------------------------------------------
 const COLOR_PALETTE = [
   [0, 0, 0],
@@ -54,7 +55,7 @@ const COLOR_PALETTE = [
 ];
 
 // ---------------------------------------------------------------------------
-// Font parsing helpers
+// Font helpers
 // ---------------------------------------------------------------------------
 function parseFontFallback(rawName) {
   const name = (rawName || 'Helvetica').replace(/^[A-Z]{6}\+/, '');
@@ -83,12 +84,6 @@ function parseFontFallback(rawName) {
     family = 'Tahoma, Verdana, sans-serif';
   } else if (/segoe/i.test(name)) {
     family = '"Segoe UI", Tahoma, Arial, sans-serif';
-  } else if (/roboto/i.test(name)) {
-    family = 'Roboto, "Helvetica Neue", Arial, sans-serif';
-  } else if (/open\s*sans/i.test(name)) {
-    family = '"Open Sans", "Segoe UI", Arial, sans-serif';
-  } else if (/lato/i.test(name)) {
-    family = 'Lato, "Segoe UI", Arial, sans-serif';
   } else if (/symbol/i.test(name)) {
     family = 'Symbol';
   } else if (/zapf|dingbat/i.test(name)) {
@@ -100,8 +95,6 @@ function parseFontFallback(rawName) {
   return { family, isBold, isItalic, cssFallback };
 }
 
-// Turn a user-picked font family ("Times", "Helvetica", "Courier")
-// into a real CSS font stack with sensible fallbacks.
 function cssStackFromFamily(family) {
   const f = (family || '').toLowerCase();
   if (f.includes('times')) {
@@ -140,7 +133,7 @@ function formatFileSize(bytes) {
 }
 
 // ---------------------------------------------------------------------------
-// Font-metric baseline measurement
+// Font-metric baseline
 // ---------------------------------------------------------------------------
 const _baselineCache = {};
 function getBaselineFromTop(cssFont, fontPx, lineHeightPx) {
@@ -164,9 +157,6 @@ function getBaselineFromTop(cssFont, fontPx, lineHeightPx) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Sample dominant ink color from a small patch around a span
-// ---------------------------------------------------------------------------
 function sampleSpanColor(ctx, span) {
   const cx = span.canvasX + span.widthPx * 0.5;
   const cy = span.canvasYBaseline - span.fontPx * 0.35;
@@ -198,7 +188,8 @@ function sampleSpanColor(ctx, span) {
 }
 
 // ---------------------------------------------------------------------------
-// In-place text editor — contentEditable <div>
+// In-place editor — no onBlur commit. Outside-click commits via document
+// listener. This lets the size input and dropdowns receive focus normally.
 // ---------------------------------------------------------------------------
 function TextEditBox({ initialText, style, onInput, onCommit, onCancel }) {
   const ref = useRef(null);
@@ -239,12 +230,6 @@ function TextEditBox({ initialText, style, onInput, onCommit, onCancel }) {
     }
   };
 
-  const handleBlur = () => {
-    if (committedRef.current) return;
-    committedRef.current = true;
-    onCommit(ref.current?.textContent ?? '');
-  };
-
   return (
     <div
       ref={ref}
@@ -252,7 +237,6 @@ function TextEditBox({ initialText, style, onInput, onCommit, onCancel }) {
       suppressContentEditableWarning
       spellCheck={false}
       onKeyDown={handleKeyDown}
-      onBlur={handleBlur}
       onInput={(e) => onInput?.(e.currentTarget.textContent ?? '')}
       style={style}
     />
@@ -260,32 +244,29 @@ function TextEditBox({ initialText, style, onInput, onCommit, onCancel }) {
 }
 
 // ---------------------------------------------------------------------------
-// Floating formatting toolbar
+// Formatting toolbar
 // ---------------------------------------------------------------------------
 function TextFormatToolbar({
   activeStyle,
   onChange,
   onDelete,
   onMoveStart,
-  onMoveEnd,
   position,
 }) {
   const [paletteOpen, setPaletteOpen] = useState(false);
-
   const currentColor = activeStyle.color || [0, 0, 0];
 
   return (
     <div
+      data-in-edit-toolbar="1"
       className="fixed z-[9999] flex items-center gap-1 px-2 py-1.5 bg-slate-900/95 backdrop-blur-md text-white rounded-xl shadow-2xl border border-slate-700/60 select-none"
       style={{ left: position.x, top: position.y }}
-      onMouseDown={(e) => e.preventDefault()}
     >
       {/* Move grip */}
       <button
         type="button"
         title="Drag to move"
         onPointerDown={onMoveStart}
-        onPointerUp={onMoveEnd}
         className="p-1 rounded hover:bg-slate-700 cursor-grab active:cursor-grabbing text-slate-300"
       >
         <GripVertical className="w-3.5 h-3.5" />
@@ -310,7 +291,7 @@ function TextFormatToolbar({
       <input
         type="number"
         min="4"
-        max="200"
+        max="300"
         placeholder="Size"
         value={activeStyle.fontSize ?? ''}
         onChange={(e) =>
@@ -319,21 +300,18 @@ function TextFormatToolbar({
             fontSize: e.target.value === '' ? null : Number(e.target.value),
           })
         }
-        className="w-12 bg-slate-800 text-white text-[11px] font-medium rounded-md px-1.5 py-1 border border-slate-700 outline-none text-center"
+        className="w-14 bg-slate-800 text-white text-[11px] font-medium rounded-md px-1.5 py-1 border border-slate-700 outline-none text-center"
         title="Font size"
       />
 
       <div className="w-px h-4 bg-slate-700" />
 
-      {/* Bold / Italic / Underline */}
+      {/* B I U */}
       <button
         type="button"
         title="Bold"
         onClick={() =>
-          onChange({
-            ...activeStyle,
-            bold: !(activeStyle.bold ?? false),
-          })
+          onChange({ ...activeStyle, bold: !(activeStyle.bold ?? false) })
         }
         className={`w-7 h-7 rounded-md flex items-center justify-center text-[13px] font-bold transition ${
           activeStyle.bold ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-700'
@@ -345,10 +323,7 @@ function TextFormatToolbar({
         type="button"
         title="Italic"
         onClick={() =>
-          onChange({
-            ...activeStyle,
-            italic: !(activeStyle.italic ?? false),
-          })
+          onChange({ ...activeStyle, italic: !(activeStyle.italic ?? false) })
         }
         className={`w-7 h-7 rounded-md flex items-center justify-center text-[13px] italic font-serif transition ${
           activeStyle.italic ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-700'
@@ -360,10 +335,7 @@ function TextFormatToolbar({
         type="button"
         title="Underline"
         onClick={() =>
-          onChange({
-            ...activeStyle,
-            underline: !activeStyle.underline,
-          })
+          onChange({ ...activeStyle, underline: !activeStyle.underline })
         }
         className={`w-7 h-7 rounded-md flex items-center justify-center text-[13px] underline transition ${
           activeStyle.underline ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-700'
@@ -407,7 +379,6 @@ function TextFormatToolbar({
                     isActive ? 'border-blue-400 ring-2 ring-blue-500/50' : 'border-slate-600'
                   }`}
                   style={{ background: rgbToCss(c) }}
-                  title={`RGB ${c.map((v) => Math.round(v * 255)).join(', ')}`}
                 />
               );
             })}
@@ -436,7 +407,8 @@ function TextFormatToolbar({
 function getEffectiveStyle(span, style) {
   const family = style?.fontFamily || span.fontFamily;
   const size = style?.fontSize ?? span.pdfFontSize;
-  const bold = style?.bold !== null && style?.bold !== undefined ? style.bold : span.isBold;
+  const bold =
+    style?.bold !== null && style?.bold !== undefined ? style.bold : span.isBold;
   const italic =
     style?.italic !== null && style?.italic !== undefined ? style.italic : span.isItalic;
   const underline = Boolean(style?.underline);
@@ -446,18 +418,15 @@ function getEffectiveStyle(span, style) {
   return { family, size, bold, italic, underline, color, offsetX, offsetY };
 }
 
-// Build a CSS font stack — when the user has picked a family we use that
-// family's stack, otherwise we use PDF.js's own subset-based stack.
 function cssStackFor(span, style) {
   if (style?.fontFamily) return cssStackFromFamily(style.fontFamily);
   return span.cssFont;
 }
 
-// Compose the effective font name string that will be sent to the backend.
-// The backend's resolve_font_code() reads bold/italic keywords from this string.
 function composeBackendFontName(span, style) {
   if (style?.fontFamily) {
-    const bold = style.bold !== null && style.bold !== undefined ? style.bold : span.isBold;
+    const bold =
+      style.bold !== null && style.bold !== undefined ? style.bold : span.isBold;
     const italic =
       style.italic !== null && style.italic !== undefined ? style.italic : span.isItalic;
     let name = style.fontFamily;
@@ -469,14 +438,69 @@ function composeBackendFontName(span, style) {
   return span.fontRaw;
 }
 
-// ---------------------------------------------------------------------------
+// Build the plain edit object (or null if nothing changed)
+function buildEdit(span, draftText, activeStyle) {
+  const effective = getEffectiveStyle(span, activeStyle);
+  const originalBbox = [
+    span.pdfX,
+    span.pdfYBaselineTopDown - span.pdfFontSize * 0.9,
+    span.pdfX + Math.max(span.pdfWidth, span.pdfFontSize * 0.5),
+    span.pdfYBaselineTopDown + span.pdfFontSize * 0.15,
+  ];
+
+  const finalFontSize = activeStyle.fontSize ?? span.pdfFontSize;
+  const finalColor = activeStyle.color ?? span.color;
+  const finalFontName = composeBackendFontName(span, activeStyle);
+
+  const nothingChanged =
+    draftText === span.text &&
+    !activeStyle.fontFamily &&
+    activeStyle.fontSize === null &&
+    activeStyle.bold === null &&
+    activeStyle.italic === null &&
+    !activeStyle.underline &&
+    !activeStyle.color &&
+    effective.offsetX === 0 &&
+    effective.offsetY === 0;
+
+  if (nothingChanged) return null;
+
+  return {
+    page: span.page,
+    bbox: originalBbox,      // for redaction — always ORIGINAL position
+    offsetX: effective.offsetX,
+    offsetY: effective.offsetY,
+    originalText: span.text,
+    newText: String(draftText),
+    fontName: finalFontName,
+    fontSize: finalFontSize,
+    color: finalColor,
+    align: 'left',
+    underline: Boolean(activeStyle.underline),
+    // Persisted overrides for re-editing
+    overrideFontFamily: activeStyle.fontFamily,
+    overrideFontSize: activeStyle.fontSize,
+    overrideBold: activeStyle.bold,
+    overrideItalic: activeStyle.italic,
+    overrideUnderline: activeStyle.underline,
+    overrideColor: activeStyle.color,
+  };
+}
+
+// ===========================================================================
 // Main component
-// ---------------------------------------------------------------------------
+// ===========================================================================
 export default function EditPdfStudio({ tool, file, onBack }) {
   const pdfDocRef = useRef(null);
   const viewerOuterRef = useRef(null);
   const pageContainerRef = useRef(null);
-  const moveDragRef = useRef({ active: false, startX: 0, startY: 0, initX: 0, initY: 0 });
+  const moveDragRef = useRef({
+    active: false,
+    startX: 0,
+    startY: 0,
+    initX: 0,
+    initY: 0,
+  });
 
   const [loading, setLoading] = useState(true);
   const [rendering, setRendering] = useState(false);
@@ -515,8 +539,18 @@ export default function EditPdfStudio({ tool, file, onBack }) {
 
   const [viewerSize, setViewerSize] = useState({ w: 0, h: 0 });
 
+  // Refs — so document-level listeners always see fresh state
+  const stateRef = useRef({});
+  stateRef.current = {
+    selectedId,
+    spans,
+    edits,
+    draftText,
+    activeStyle,
+  };
+
   // -------------------------------------------------------------------------
-  // Reset per-file state
+  // Reset on new file
   // -------------------------------------------------------------------------
   useEffect(() => {
     setUserZoomed(false);
@@ -524,10 +558,20 @@ export default function EditPdfStudio({ tool, file, onBack }) {
     setNaturalPageSize({ width: 0, height: 0 });
     setEdits({});
     setSelectedId(null);
+    setActiveStyle({
+      fontFamily: null,
+      fontSize: null,
+      bold: null,
+      italic: null,
+      underline: false,
+      color: null,
+      offsetX: 0,
+      offsetY: 0,
+    });
   }, [file]);
 
   // -------------------------------------------------------------------------
-  // Viewer size tracking
+  // Viewer size
   // -------------------------------------------------------------------------
   useEffect(() => {
     const el = viewerOuterRef.current;
@@ -550,7 +594,7 @@ export default function EditPdfStudio({ tool, file, onBack }) {
   }, [loading, loadFailed, result]);
 
   // -------------------------------------------------------------------------
-  // Auto-fit to screen
+  // Auto-fit
   // -------------------------------------------------------------------------
   useEffect(() => {
     if (userZoomed || result) return;
@@ -561,14 +605,17 @@ export default function EditPdfStudio({ tool, file, onBack }) {
     const availH = viewerSize.h - 68;
     if (availW <= 0 || availH <= 0) return;
 
-    const fitZoom = Math.min(availW / naturalPageSize.width, availH / naturalPageSize.height);
+    const fitZoom = Math.min(
+      availW / naturalPageSize.width,
+      availH / naturalPageSize.height
+    );
     const clamped = Math.max(0.2, Math.min(3.0, fitZoom));
 
     if (Math.abs(clamped - zoom) > 0.01) setZoom(clamped);
   }, [naturalPageSize, viewerSize, userZoomed, zoom, result]);
 
   // -------------------------------------------------------------------------
-  // Load PDF once
+  // Load PDF
   // -------------------------------------------------------------------------
   useEffect(() => {
     let cancelled = false;
@@ -631,7 +678,10 @@ export default function EditPdfStudio({ tool, file, onBack }) {
       try {
         const page = await pdfDocRef.current.getPage(currentPage);
         const unscaledVp = page.getViewport({ scale: 1 });
-        setNaturalPageSize({ width: unscaledVp.width, height: unscaledVp.height });
+        setNaturalPageSize({
+          width: unscaledVp.width,
+          height: unscaledVp.height,
+        });
 
         const vp = page.getViewport({ scale: zoom });
 
@@ -712,7 +762,8 @@ export default function EditPdfStudio({ tool, file, onBack }) {
 
           const styleInfo = styles[item.fontName] || {};
           const realFontName = getRealFontName(page, item.fontName);
-          const rawFont = realFontName || styleInfo.fontFamily || item.fontName || 'Helvetica';
+          const rawFont =
+            realFontName || styleInfo.fontFamily || item.fontName || 'Helvetica';
 
           const fallback = parseFontFallback(rawFont);
           const cssFontStack = `"${item.fontName}", ${fallback.family}, ${fallback.cssFallback}`;
@@ -762,7 +813,7 @@ export default function EditPdfStudio({ tool, file, onBack }) {
   }, [loading, loadFailed, currentPage, zoom, result]);
 
   // -------------------------------------------------------------------------
-  // Toolbar position (fixed positioning, follows the selected span)
+  // Toolbar position
   // -------------------------------------------------------------------------
   useEffect(() => {
     if (!selectedId) {
@@ -776,18 +827,18 @@ export default function EditPdfStudio({ tool, file, onBack }) {
       const el = pageContainerRef.current;
       if (!el) return;
       const rect = el.getBoundingClientRect();
-      const style = getEffectiveStyle(span, activeStyle);
-      const spanPx = style.size * zoom;
-      const spanX = rect.left + (span.canvasX + style.offsetX * zoom);
-      const spanY = rect.top + (span.canvasYBaseline + style.offsetY * zoom) - spanPx;
+      const eff = getEffectiveStyle(span, activeStyle);
+      const spanPx = eff.size * zoom;
+      const spanX = rect.left + (span.canvasX + eff.offsetX * zoom);
+      const spanY = rect.top + (span.canvasYBaseline + eff.offsetY * zoom) - spanPx;
 
-      const tbW = 520;
+      const tbW = 540;
       const tbH = 40;
       let left = spanX - 12;
       let top = spanY - tbH - 10;
 
       left = Math.max(8, Math.min(window.innerWidth - tbW - 8, left));
-      if (top < 8) top = rect.top + (span.canvasYBaseline + style.offsetY * zoom) + spanPx + 8;
+      if (top < 8) top = rect.top + (span.canvasYBaseline + eff.offsetY * zoom) + spanPx + 8;
       if (top + tbH > window.innerHeight - 8) top = window.innerHeight - tbH - 8;
 
       setToolbarPos({ x: left, y: top });
@@ -803,9 +854,95 @@ export default function EditPdfStudio({ tool, file, onBack }) {
   }, [selectedId, spans, activeStyle, zoom]);
 
   // -------------------------------------------------------------------------
-  // Editing — begin
+  // Commit / cancel / delete
   // -------------------------------------------------------------------------
+  const commitEdit = () => {
+    const s = stateRef.current;
+    if (!s.selectedId) return;
+    const span = s.spans.find((x) => x.id === s.selectedId);
+    if (!span) {
+      setSelectedId(null);
+      return;
+    }
+    const editObj = buildEdit(span, s.draftText, s.activeStyle);
+
+    if (!editObj) {
+      // nothing changed — clear the edit if there was one
+      if (s.edits[span.id]) {
+        setEdits((prev) => {
+          const next = { ...prev };
+          delete next[span.id];
+          return next;
+        });
+      }
+      setSelectedId(null);
+      return;
+    }
+
+    setEdits((prev) => ({ ...prev, [span.id]: editObj }));
+    setSelectedId(null);
+  };
+
+  const cancelEdit = () => {
+    setSelectedId(null);
+    setActiveStyle({
+      fontFamily: null,
+      fontSize: null,
+      bold: null,
+      italic: null,
+      underline: false,
+      color: null,
+      offsetX: 0,
+      offsetY: 0,
+    });
+  };
+
+  const handleDeleteText = () => {
+    const s = stateRef.current;
+    if (!s.selectedId) return;
+    const span = s.spans.find((x) => x.id === s.selectedId);
+    if (!span) return;
+
+    const eff = getEffectiveStyle(span, s.activeStyle);
+    const originalBbox = [
+      span.pdfX,
+      span.pdfYBaselineTopDown - span.pdfFontSize * 0.9,
+      span.pdfX + Math.max(span.pdfWidth, span.pdfFontSize * 0.5),
+      span.pdfYBaselineTopDown + span.pdfFontSize * 0.15,
+    ];
+
+    setEdits((prev) => ({
+      ...prev,
+      [span.id]: {
+        page: span.page,
+        bbox: originalBbox,
+        offsetX: eff.offsetX,
+        offsetY: eff.offsetY,
+        originalText: span.text,
+        newText: '',
+        fontName: span.fontRaw,
+        fontSize: span.pdfFontSize,
+        color: span.color,
+        align: 'left',
+        underline: false,
+        overrideFontFamily: null,
+        overrideFontSize: null,
+        overrideBold: null,
+        overrideItalic: null,
+        overrideUnderline: false,
+        overrideColor: null,
+      },
+    }));
+    setSelectedId(null);
+  };
+
   const beginEdit = (span) => {
+    // if a different span is already selected, commit it first
+    const s = stateRef.current;
+    if (s.selectedId && s.selectedId !== span.id) {
+      commitEdit();
+    }
+
     setSelectedId(span.id);
     const existing = edits[span.id];
     if (existing) {
@@ -836,159 +973,23 @@ export default function EditPdfStudio({ tool, file, onBack }) {
   };
 
   // -------------------------------------------------------------------------
-  // Commit — merge text + activeStyle into edits
+  // Document-level outside-click → commit
   // -------------------------------------------------------------------------
-  const commitEdit = (text) => {
-    const safeText = typeof text === 'string' ? text : null;
-
-    if (!selectedId) return;
-    const span = spans.find((s) => s.id === selectedId);
-    if (!span) {
-      setSelectedId(null);
-      return;
-    }
-    const existing = edits[selectedId];
-    const newText =
-      safeText !== null ? safeText : typeof draftText === 'string' ? draftText : '';
-
-    // Effective style for offset baking
-    const effective = getEffectiveStyle(span, activeStyle);
-
-    // Bounding box (PDF user space, top-down) with move offset applied
-    const offsetXpdf = effective.offsetX;
-    const offsetYpdf = effective.offsetY;
-    const baseBbox = [
-      span.pdfX,
-      span.pdfYBaselineTopDown - span.pdfFontSize * 0.9,
-      span.pdfX + Math.max(span.pdfWidth, span.pdfFontSize * 0.5),
-      span.pdfYBaselineTopDown + span.pdfFontSize * 0.15,
-    ];
-    const bbox = [
-      baseBbox[0] + offsetXpdf,
-      baseBbox[1] + offsetYpdf,
-      baseBbox[2] + offsetXpdf,
-      baseBbox[3] + offsetYpdf,
-    ];
-
-    // Effective font size and color (with overrides applied)
-    const finalFontSize = activeStyle.fontSize ?? span.pdfFontSize;
-    const finalColor = activeStyle.color ?? span.color;
-    const finalFontName = composeBackendFontName(span, activeStyle);
-
-    // Nothing changed? drop the edit
-    const nothingChanged =
-      newText === span.text &&
-      !activeStyle.fontFamily &&
-      activeStyle.fontSize === null &&
-      activeStyle.bold === null &&
-      activeStyle.italic === null &&
-      !activeStyle.underline &&
-      !activeStyle.color &&
-      offsetXpdf === 0 &&
-      offsetYpdf === 0;
-
-    if (nothingChanged) {
-      if (existing) {
-        setEdits((prev) => {
-          const next = { ...prev };
-          delete next[selectedId];
-          return next;
-        });
-      }
-      setSelectedId(null);
-      return;
-    }
-
-    setEdits((prev) => ({
-      ...prev,
-      [span.id]: {
-        page: span.page,
-        bbox,
-        originalText: span.text,
-        newText: String(newText),
-        fontName: finalFontName,
-        fontSize: finalFontSize,
-        color: finalColor,
-        align: 'left',
-        // Persist overrides so re-editing keeps them:
-        overrideFontFamily: activeStyle.fontFamily,
-        overrideFontSize: activeStyle.fontSize,
-        overrideBold: activeStyle.bold,
-        overrideItalic: activeStyle.italic,
-        overrideUnderline: activeStyle.underline,
-        overrideColor: activeStyle.color,
-        offsetX: offsetXpdf,
-        offsetY: offsetYpdf,
-      },
-    }));
-    setSelectedId(null);
-  };
+  useEffect(() => {
+    const onDocMouseDown = (e) => {
+      if (!stateRef.current.selectedId) return;
+      if (e.target.closest('[data-in-edit-toolbar]')) return;
+      if (e.target.closest('[data-in-edit-box]')) return;
+      // Click is outside both — commit
+      commitEdit();
+    };
+    document.addEventListener('mousedown', onDocMouseDown, true);
+    return () => document.removeEventListener('mousedown', onDocMouseDown, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // -------------------------------------------------------------------------
-  // Cancel — discard activeStyle + text
-  // -------------------------------------------------------------------------
-  const cancelEdit = () => {
-    setSelectedId(null);
-    setActiveStyle({
-      fontFamily: null,
-      fontSize: null,
-      bold: null,
-      italic: null,
-      underline: false,
-      color: null,
-      offsetX: 0,
-      offsetY: 0,
-    });
-  };
-
-  // -------------------------------------------------------------------------
-  // Delete — mark span as empty text
-  // -------------------------------------------------------------------------
-  const handleDeleteText = () => {
-    if (!selectedId) return;
-    const span = spans.find((s) => s.id === selectedId);
-    if (!span) return;
-
-    const effective = getEffectiveStyle(span, activeStyle);
-    const baseBbox = [
-      span.pdfX,
-      span.pdfYBaselineTopDown - span.pdfFontSize * 0.9,
-      span.pdfX + Math.max(span.pdfWidth, span.pdfFontSize * 0.5),
-      span.pdfYBaselineTopDown + span.pdfFontSize * 0.15,
-    ];
-    const bbox = [
-      baseBbox[0] + effective.offsetX,
-      baseBbox[1] + effective.offsetY,
-      baseBbox[2] + effective.offsetX,
-      baseBbox[3] + effective.offsetY,
-    ];
-
-    setEdits((prev) => ({
-      ...prev,
-      [span.id]: {
-        page: span.page,
-        bbox,
-        originalText: span.text,
-        newText: '',
-        fontName: span.fontRaw,
-        fontSize: span.pdfFontSize,
-        color: span.color,
-        align: 'left',
-        overrideFontFamily: null,
-        overrideFontSize: null,
-        overrideBold: null,
-        overrideItalic: null,
-        overrideUnderline: false,
-        overrideColor: null,
-        offsetX: effective.offsetX,
-        offsetY: effective.offsetY,
-      },
-    }));
-    setSelectedId(null);
-  };
-
-  // -------------------------------------------------------------------------
-  // Drag-to-move handler
+  // Drag-to-move
   // -------------------------------------------------------------------------
   const handleMoveStart = (e) => {
     e.preventDefault();
@@ -1023,13 +1024,6 @@ export default function EditPdfStudio({ tool, file, onBack }) {
     window.addEventListener('pointerup', onUp);
   };
 
-  const handleMoveEnd = () => {
-    /* handled inside handleMoveStart's onUp */
-  };
-
-  // -------------------------------------------------------------------------
-  // Other edit mutations
-  // -------------------------------------------------------------------------
   const revertEdit = (spanId) => {
     setEdits((prev) => {
       const next = { ...prev };
@@ -1061,23 +1055,39 @@ export default function EditPdfStudio({ tool, file, onBack }) {
   // Save
   // -------------------------------------------------------------------------
   const handleSave = async () => {
-    if (Object.keys(edits).length === 0) {
+    // Commit any in-progress edit synchronously
+    if (stateRef.current.selectedId) {
+      try {
+        flushSync(() => commitEdit());
+      } catch {
+        commitEdit();
+      }
+    }
+
+    // Small delay to let React flush the state update
+    await new Promise((r) => setTimeout(r, 0));
+
+    const finalEdits = { ...edits };
+    if (Object.keys(finalEdits).length === 0) {
       setErrorMsg('Make at least one text change before saving.');
       return;
     }
+
     setSaving(true);
     setErrorMsg('');
     try {
-      const payload = Object.values(edits).map((e) => ({
+      const payload = Object.values(finalEdits).map((e) => ({
         page: e.page,
-        bbox: e.bbox,
+        bbox: e.bbox,                 // original position — for redaction
+        offsetX: e.offsetX || 0,      // PDF points — for insertion
+        offsetY: e.offsetY || 0,
         originalText: e.originalText,
         newText: e.newText,
         fontName: e.fontName,
         fontSize: e.fontSize,
         color: e.color,
         align: e.align,
-        underline: Boolean(e.overrideUnderline),
+        underline: Boolean(e.underline),
       }));
       const output = await editPdfText(file, payload);
       const url = URL.createObjectURL(output.blob);
@@ -1308,7 +1318,31 @@ export default function EditPdfStudio({ tool, file, onBack }) {
                       const isSelected = selectedId === span.id;
                       const isModified = Boolean(edit);
 
-                      // Effective style for rendering
+                      // ------- Cover at ORIGINAL position (hides canvas text) -------
+                      const origLineH = span.fontPx * 1.15;
+                      const origBaseFromTop = getBaselineFromTop(
+                        span.cssFont,
+                        span.fontPx,
+                        origLineH
+                      );
+                      const origLeft = span.canvasX;
+                      const origTop = span.canvasYBaseline - origBaseFromTop;
+                      const origWidth = Math.max(span.widthPx, 12);
+
+                      const coverNode = (isSelected || isModified) && (
+                        <div
+                          key={`${span.id}-cover`}
+                          className="absolute z-20 bg-white rounded-[2px] pointer-events-none"
+                          style={{
+                            left: `${origLeft - 3}px`,
+                            top: `${origTop - 3}px`,
+                            width: `${origWidth + 6}px`,
+                            height: `${origLineH + 6}px`,
+                          }}
+                        />
+                      );
+
+                      // ------- Effective style for the display/edit text -------
                       const displayStyle = isSelected
                         ? activeStyle
                         : edit
@@ -1326,20 +1360,23 @@ export default function EditPdfStudio({ tool, file, onBack }) {
 
                       const eff = getEffectiveStyle(span, displayStyle);
                       const cssFont = cssStackFor(span, displayStyle);
-                      const offsetPx = { x: eff.offsetX * zoom, y: eff.offsetY * zoom };
+                      const offsetPx = {
+                        x: eff.offsetX * zoom,
+                        y: eff.offsetY * zoom,
+                      };
 
                       const fontPx = eff.size * zoom;
                       const left = span.canvasX + offsetPx.x;
                       const baselinePx = span.canvasYBaseline + offsetPx.y;
-
                       const lineHeightPx = fontPx * 1.15;
-                      const baselineFromTop = getBaselineFromTop(cssFont, fontPx, lineHeightPx);
-                      const top = baselinePx - baselineFromTop;
-                      const minWidth = Math.max(span.widthPx, 12);
+                      const baseFromTop = getBaselineFromTop(cssFont, fontPx, lineHeightPx);
+                      const top = baselinePx - baseFromTop;
+                      const scaleFactor = fontPx / Math.max(span.fontPx, 1);
+                      const minWidth = Math.max(span.widthPx * scaleFactor, 12);
 
                       const displayText = isModified ? edit.newText : span.text;
 
-                      const sharedStyle = {
+                      const textStyle = {
                         left: `${left}px`,
                         top: `${top}px`,
                         height: `${lineHeightPx}px`,
@@ -1349,107 +1386,109 @@ export default function EditPdfStudio({ tool, file, onBack }) {
                         fontWeight: eff.bold ? 'bold' : 'normal',
                         fontStyle: eff.italic ? 'italic' : 'normal',
                         textDecoration: eff.underline ? 'underline' : 'none',
+                        color: rgbToCss(eff.color),
                         whiteSpace: 'pre',
                         padding: 0,
                         margin: 0,
                         boxSizing: 'border-box',
                       };
 
-                      // ---------- EDITING ----------
+                      // ---------- SELECTED (edit mode) ----------
                       if (isSelected) {
                         return (
-                          <div
-                            key={span.id}
-                            className="absolute z-30"
-                            style={{
-                              ...sharedStyle,
-                              width: `${minWidth + 30}px`,
-                              outline: isMoving
-                                ? '1.5px dashed #3b82f6'
-                                : '1.5px solid #3b82f6',
-                              outlineOffset: '0px',
-                            }}
-                          >
+                          <React.Fragment key={span.id}>
+                            {coverNode}
                             <div
-                              className="absolute rounded-[2px] bg-white"
-                              style={{ inset: 0 }}
-                            />
-                            <TextEditBox
-                              initialText={draftText}
-                              onInput={(v) => setDraftText(typeof v === 'string' ? v : '')}
-                              onCommit={commitEdit}
-                              onCancel={cancelEdit}
+                              data-in-edit-box="1"
+                              className="absolute z-30"
                               style={{
-                                position: 'absolute',
-                                left: 0,
-                                top: 0,
-                                width: '100%',
-                                height: '100%',
-                                padding: 0,
-                                margin: 0,
-                                border: 'none',
-                                outline: 'none',
-                                backgroundColor: 'transparent',
-                                fontFamily: cssFont,
-                                fontSize: `${fontPx}px`,
-                                fontWeight: eff.bold ? 'bold' : 'normal',
-                                fontStyle: eff.italic ? 'italic' : 'normal',
-                                textDecoration: eff.underline ? 'underline' : 'none',
-                                color: rgbToCss(eff.color),
-                                lineHeight: `${lineHeightPx}px`,
-                                boxSizing: 'border-box',
-                                textAlign: 'left',
-                                whiteSpace: 'pre',
-                                overflow: 'hidden',
-                                cursor: isMoving ? 'move' : 'text',
+                                ...textStyle,
+                                width: `${minWidth + 30}px`,
+                                outline: isMoving
+                                  ? '1.5px dashed #3b82f6'
+                                  : '1.5px solid #3b82f6',
+                                outlineOffset: '0px',
                               }}
-                            />
-                          </div>
+                            >
+                              <TextEditBox
+                                initialText={draftText}
+                                onInput={(v) =>
+                                  setDraftText(typeof v === 'string' ? v : '')
+                                }
+                                onCommit={commitEdit}
+                                onCancel={cancelEdit}
+                                style={{
+                                  position: 'absolute',
+                                  left: 0,
+                                  top: 0,
+                                  width: '100%',
+                                  height: '100%',
+                                  padding: 0,
+                                  margin: 0,
+                                  border: 'none',
+                                  outline: 'none',
+                                  backgroundColor: 'transparent',
+                                  fontFamily: cssFont,
+                                  fontSize: `${fontPx}px`,
+                                  fontWeight: eff.bold ? 'bold' : 'normal',
+                                  fontStyle: eff.italic ? 'italic' : 'normal',
+                                  textDecoration: eff.underline ? 'underline' : 'none',
+                                  color: rgbToCss(eff.color),
+                                  lineHeight: `${lineHeightPx}px`,
+                                  boxSizing: 'border-box',
+                                  textAlign: 'left',
+                                  whiteSpace: 'pre',
+                                  overflow: 'visible',
+                                  cursor: isMoving ? 'move' : 'text',
+                                }}
+                              />
+                            </div>
+                          </React.Fragment>
                         );
                       }
 
                       // ---------- MODIFIED ----------
                       if (isModified) {
+                        // Deleted text
                         if (edit.newText === '') {
-                          // deleted — show subtle indicator on hover
                           return (
-                            <div
-                              key={span.id}
-                              className="absolute z-20 cursor-text group"
-                              style={{ ...sharedStyle, width: `${minWidth}px` }}
-                              onClick={() => beginEdit(span)}
-                              title="Deleted — click to edit"
-                            >
-                              <div className="absolute rounded-[2px] bg-white" style={{ inset: 0 }} />
-                              <span className="hidden group-hover:flex absolute inset-0 items-center justify-center text-[10px] font-bold text-rose-500 bg-rose-50/80 rounded-[2px]">
-                                deleted
-                              </span>
-                            </div>
+                            <React.Fragment key={span.id}>
+                              {coverNode}
+                              <div
+                                className="absolute z-30 cursor-text group"
+                                style={{ ...textStyle, width: `${minWidth}px` }}
+                                onClick={() => beginEdit(span)}
+                                title="Deleted — click to edit"
+                              >
+                                <span className="hidden group-hover:flex absolute inset-0 items-center justify-center text-[10px] font-bold text-rose-500 bg-rose-50/80 rounded-[2px]">
+                                  deleted
+                                </span>
+                              </div>
+                            </React.Fragment>
                           );
                         }
+
                         return (
-                          <div
-                            key={span.id}
-                            className="absolute z-20 cursor-text group"
-                            style={{
-                              ...sharedStyle,
-                              minWidth: `${minWidth + 10}px`,
-                              width: 'auto',
-                            }}
-                            onClick={() => beginEdit(span)}
-                            title="Click to edit"
-                          >
+                          <React.Fragment key={span.id}>
+                            {coverNode}
                             <div
-                              className="absolute rounded-[2px] bg-white"
-                              style={{ inset: 0 }}
-                            />
-                            <span className="relative block">
-                              {String(displayText ?? '') || '\u00A0'}
-                            </span>
-                            <span className="absolute -top-1.5 -right-1.5 hidden group-hover:flex items-center justify-center w-4 h-4 bg-blue-600 text-white rounded-full text-[10px] font-bold">
-                              ✎
-                            </span>
-                          </div>
+                              className="absolute z-30 cursor-text group"
+                              style={{
+                                ...textStyle,
+                                minWidth: `${minWidth + 10}px`,
+                                width: 'auto',
+                              }}
+                              onClick={() => beginEdit(span)}
+                              title="Click to edit"
+                            >
+                              <span className="relative block">
+                                {String(displayText ?? '') || '\u00A0'}
+                              </span>
+                              <span className="absolute -top-1.5 -right-1.5 hidden group-hover:flex items-center justify-center w-4 h-4 bg-blue-600 text-white rounded-full text-[10px] font-bold">
+                                ✎
+                              </span>
+                            </div>
+                          </React.Fragment>
                         );
                       }
 
@@ -1458,7 +1497,7 @@ export default function EditPdfStudio({ tool, file, onBack }) {
                         <div
                           key={span.id}
                           className="absolute z-10 cursor-text hover:bg-blue-500/15 rounded-[2px] transition-colors"
-                          style={{ ...sharedStyle, width: `${minWidth}px` }}
+                          style={{ ...textStyle, width: `${minWidth}px` }}
                           onClick={() => beginEdit(span)}
                           title="Click to edit"
                         />
@@ -1507,7 +1546,9 @@ export default function EditPdfStudio({ tool, file, onBack }) {
                 >
                   <ZoomIn className="w-3.5 h-3.5" />
                 </button>
-                <span className="font-mono text-slate-300 font-semibold">{Math.round(zoom * 100)}%</span>
+                <span className="font-mono text-slate-300 font-semibold">
+                  {Math.round(zoom * 100)}%
+                </span>
                 <button
                   onClick={handleFitToScreen}
                   className="p-1 hover:bg-slate-700 rounded-lg cursor-pointer text-slate-300"
@@ -1529,9 +1570,24 @@ export default function EditPdfStudio({ tool, file, onBack }) {
                 </h3>
                 <ul className="mt-3 space-y-1.5 text-slate-600 leading-relaxed">
                   <li>1. Click any text — a toolbar appears above it.</li>
-                  <li>2. Change font, size, color, weight, or drag to move.</li>
-                  <li>3. Press <kbd className="px-1 py-0.5 bg-slate-100 border border-slate-200 rounded text-[10px]">Enter</kbd> to save the edit, <kbd className="px-1 py-0.5 bg-slate-100 border border-slate-200 rounded text-[10px]">Esc</kbd> to cancel.</li>
-                  <li>4. Click <strong>Save &amp; Download</strong> when done.</li>
+                  <li>2. Change font, size, color, weight, or drag the grip to move.</li>
+                  <li>
+                    3. Press{' '}
+                    <kbd className="px-1 py-0.5 bg-slate-100 border border-slate-200 rounded text-[10px]">
+                      Enter
+                    </kbd>{' '}
+                    or click outside to save the edit.
+                  </li>
+                  <li>
+                    4. Press{' '}
+                    <kbd className="px-1 py-0.5 bg-slate-100 border border-slate-200 rounded text-[10px]">
+                      Esc
+                    </kbd>{' '}
+                    to cancel.
+                  </li>
+                  <li>
+                    5. Click <strong>Save &amp; Download</strong> when done.
+                  </li>
                 </ul>
               </div>
 
@@ -1541,7 +1597,7 @@ export default function EditPdfStudio({ tool, file, onBack }) {
                   <span>Preserved Properties</span>
                 </h4>
                 <p className="mt-2 text-slate-500 leading-relaxed">
-                  Font family, weight, italic, underline, size, color, and position are all carried
+                  Font, weight, italic, underline, size, color, and position are all carried
                   through to the final PDF.
                 </p>
               </div>
@@ -1551,7 +1607,9 @@ export default function EditPdfStudio({ tool, file, onBack }) {
                   <span className="font-bold text-slate-700">Pending changes</span>
                   <span
                     className={`font-bold px-2 py-0.5 rounded-full ${
-                      totalEdits > 0 ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-500'
+                      totalEdits > 0
+                        ? 'bg-blue-100 text-blue-700'
+                        : 'bg-slate-100 text-slate-500'
                     }`}
                   >
                     {totalEdits}
@@ -1616,8 +1674,8 @@ export default function EditPdfStudio({ tool, file, onBack }) {
             <div className="bg-sky-50 border border-sky-200 rounded-3xl p-4 text-[11px] text-sky-900 flex items-start space-x-2">
               <Info className="w-4 h-4 text-sky-600 shrink-0 mt-0.5" />
               <p className="leading-relaxed">
-                On save, PyMuPDF redacts the original glyphs and re-inserts new text using the
-                closest embedded Base-14 font, matching position, size, and color.
+                On save, PyMuPDF redacts the original glyphs and re-inserts the new text using
+                the closest embedded Base-14 font, matching position, size, and color.
               </p>
             </div>
           </div>
@@ -1631,7 +1689,6 @@ export default function EditPdfStudio({ tool, file, onBack }) {
           onChange={setActiveStyle}
           onDelete={handleDeleteText}
           onMoveStart={handleMoveStart}
-          onMoveEnd={handleMoveEnd}
           position={toolbarPos}
         />
       )}
