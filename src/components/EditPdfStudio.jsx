@@ -11,17 +11,11 @@ import * as pdfjsLib from 'pdfjs-dist';
 import { editPdfText, checkPdfPassword } from '../utils/pdfWorker';
 import TextFormatSidebar from './TextFormatSidebar';
 
-// ---------------------------------------------------------------------------
-// PDF.js worker
-// ---------------------------------------------------------------------------
 if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
   pdfjsLib.GlobalWorkerOptions.workerSrc =
     `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
 }
 
-// ---------------------------------------------------------------------------
-// Palette
-// ---------------------------------------------------------------------------
 const COLOR_PALETTE = [
   [0, 0, 0], [0.25, 0.25, 0.25], [0.5, 0.5, 0.5], [0.75, 0.75, 0.75],
   [1, 1, 1], [0.86, 0.15, 0.15], [0.95, 0.42, 0.1], [0.95, 0.75, 0.1],
@@ -30,40 +24,157 @@ const COLOR_PALETTE = [
 ];
 
 // ---------------------------------------------------------------------------
-// Font helpers
+// Font family map — ~85 entries
 // ---------------------------------------------------------------------------
-function parseFontFallback(rawName) {
-  const name = (rawName || 'Helvetica').replace(/^[A-Z]{6}\+/, '');
-  const isBold = /bold|black|heavy|semibold|demibold|extrabold/i.test(name);
-  const isItalic = /italic|oblique/i.test(name);
-  let family = 'Helvetica, Arial, sans-serif';
-  let cssFallback = 'sans-serif';
-  if (/times|serif|roman|georgia|garamond|book/i.test(name)) {
-    family = '"Times New Roman", Times, "Liberation Serif", Georgia, serif';
-    cssFallback = 'serif';
-  } else if (/courier|mono|consol/i.test(name)) {
-    family = '"Courier New", Courier, "Liberation Mono", monospace';
-    cssFallback = 'monospace';
-  } else if (/arial|helvetica|helv/i.test(name)) {
-    family = 'Arial, Helvetica, "Liberation Sans", sans-serif';
-  } else if (/calibri/i.test(name)) {
-    family = 'Calibri, "Segoe UI", "Carlito", Arial, sans-serif';
+const FONT_FAMILY_MAP = [
+  { re: /^helvetica/i,           name: 'Helvetica',         css: 'Helvetica, Arial, "Liberation Sans", sans-serif',          fb: 'sans-serif' },
+  { re: /^arial/i,               name: 'Arial',             css: 'Arial, Helvetica, "Liberation Sans", sans-serif',          fb: 'sans-serif' },
+  { re: /^liberationsans/i,      name: 'Arial',             css: 'Arial, Helvetica, "Liberation Sans", sans-serif',          fb: 'sans-serif' },
+  { re: /^times/i,               name: 'Times New Roman',   css: '"Times New Roman", Times, "Liberation Serif", serif',      fb: 'serif' },
+  { re: /^liberationserif/i,     name: 'Times New Roman',   css: '"Times New Roman", Times, "Liberation Serif", serif',      fb: 'serif' },
+  { re: /^courier/i,             name: 'Courier New',       css: '"Courier New", Courier, "Liberation Mono", monospace',    fb: 'monospace' },
+  { re: /^liberationmono/i,      name: 'Courier New',       css: '"Courier New", Courier, "Liberation Mono", monospace',    fb: 'monospace' },
+  { re: /^calibri|^carlito/i,    name: 'Calibri',           css: 'Calibri, "Carlito", "Segoe UI", Arial, sans-serif',         fb: 'sans-serif' },
+  { re: /^cambria|^caladea/i,    name: 'Cambria',           css: 'Cambria, "Caladea", Georgia, serif',                        fb: 'serif' },
+  { re: /^georgia/i,             name: 'Georgia',           css: 'Georgia, "Liberation Serif", serif',                        fb: 'serif' },
+  { re: /^verdana/i,             name: 'Verdana',           css: 'Verdana, Geneva, "DejaVu Sans", sans-serif',                fb: 'sans-serif' },
+  { re: /^tahoma/i,              name: 'Tahoma',            css: 'Tahoma, Verdana, "DejaVu Sans", sans-serif',                fb: 'sans-serif' },
+  { re: /^trebuchet/i,           name: 'Trebuchet MS',      css: '"Trebuchet MS", "DejaVu Sans", sans-serif',                 fb: 'sans-serif' },
+  { re: /^segoe/i,               name: 'Segoe UI',          css: '"Segoe UI", "Carlito", Arial, sans-serif',                  fb: 'sans-serif' },
+  { re: /^aptos/i,               name: 'Aptos',             css: 'Aptos, "Segoe UI", Arial, sans-serif',                      fb: 'sans-serif' },
+  { re: /^consolas/i,            name: 'Consolas',          css: 'Consolas, "Liberation Mono", monospace',                    fb: 'monospace' },
+  { re: /^adobegaramond/i,       name: 'Adobe Garamond',    css: '"EB Garamond", "Adobe Garamond Pro", Garamond, serif',       fb: 'serif' },
+  { re: /^ebgaramond/i,          name: 'EB Garamond',       css: '"EB Garamond", Garamond, serif',                            fb: 'serif' },
+  { re: /^cormorant/i,           name: 'Cormorant Garamond', css: '"Cormorant Garamond", Garamond, serif',                    fb: 'serif' },
+  { re: /^garamond/i,            name: 'Garamond',          css: 'Garamond, "EB Garamond", serif',                            fb: 'serif' },
+  { re: /^minion/i,              name: 'Minion Pro',        css: 'Minion, "Times New Roman", serif',                          fb: 'serif' },
+  { re: /^myriad/i,              name: 'Myriad Pro',        css: '"Myriad Pro", "Segoe UI", Arial, sans-serif',               fb: 'sans-serif' },
+  { re: /^frutiger/i,            name: 'Frutiger',          css: 'Frutiger, "Segoe UI", Arial, sans-serif',                   fb: 'sans-serif' },
+  { re: /^palatino|^bookantiqua|^urwpalladio/i, name: 'Palatino', css: 'Palatino, "Book Antiqua", "URW Palladio L", serif',      fb: 'serif' },
+  { re: /^bookman/i,             name: 'Bookman',           css: '"Bookman Old Style", Bookman, serif',                       fb: 'serif' },
+  { re: /^century|^newschoolbook/i, name: 'Century Schoolbook', css: '"Century Schoolbook", "New Century Schoolbook", serif', fb: 'serif' },
+  { re: /^baskerville|^librebask/i, name: 'Baskerville',    css: 'Baskerville, "Libre Baskerville", serif',                    fb: 'serif' },
+  { re: /^caslon/i,              name: 'Caslon',            css: 'Caslon, "Libre Caslon Text", serif',                         fb: 'serif' },
+  { re: /^optima/i,              name: 'Optima',            css: 'Optima, "Segoe UI", sans-serif',                             fb: 'sans-serif' },
+  { re: /^futura/i,              name: 'Futura',            css: 'Futura, "Century Gothic", sans-serif',                       fb: 'sans-serif' },
+  { re: /^avenir/i,              name: 'Avenir',            css: 'Avenir, "Century Gothic", sans-serif',                       fb: 'sans-serif' },
+  { re: /^centurygothic/i,       name: 'Century Gothic',    css: '"Century Gothic", Futura, sans-serif',                       fb: 'sans-serif' },
+  { re: /^gillsans/i,            name: 'Gill Sans',         css: '"Gill Sans", "Trebuchet MS", sans-serif',                    fb: 'sans-serif' },
+  { re: /^franklin/i,            name: 'Franklin Gothic',   css: '"Franklin Gothic Medium", "Franklin Gothic", Arial, sans-serif', fb: 'sans-serif' },
+  { re: /^candara/i,             name: 'Candara',           css: 'Candara, "Segoe UI", Arial, sans-serif',                     fb: 'sans-serif' },
+  { re: /^corbel/i,              name: 'Corbel',            css: 'Corbel, "Segoe UI", Arial, sans-serif',                      fb: 'sans-serif' },
+  { re: /^constantia/i,          name: 'Constantia',        css: 'Constantia, Cambria, serif',                                fb: 'serif' },
+  { re: /^roboto$|^robotosans/i, name: 'Roboto',            css: 'Roboto, Arial, sans-serif',                                 fb: 'sans-serif' },
+  { re: /^opensans/i,            name: 'Open Sans',         css: '"Open Sans", Arial, sans-serif',                            fb: 'sans-serif' },
+  { re: /^lato/i,                name: 'Lato',              css: 'Lato, Arial, sans-serif',                                    fb: 'sans-serif' },
+  { re: /^montserrat/i,          name: 'Montserrat',        css: 'Montserrat, Arial, sans-serif',                              fb: 'sans-serif' },
+  { re: /^poppins/i,             name: 'Poppins',           css: 'Poppins, Arial, sans-serif',                                 fb: 'sans-serif' },
+  { re: /^inter/i,               name: 'Inter',             css: 'Inter, "Segoe UI", Arial, sans-serif',                       fb: 'sans-serif' },
+  { re: /^nunito/i,              name: 'Nunito',            css: 'Nunito, Arial, sans-serif',                                  fb: 'sans-serif' },
+  { re: /^raleway/i,             name: 'Raleway',           css: 'Raleway, Arial, sans-serif',                                 fb: 'sans-serif' },
+  { re: /^worksans/i,            name: 'Work Sans',         css: '"Work Sans", Arial, sans-serif',                             fb: 'sans-serif' },
+  { re: /^ubuntu(?!mono)/i,      name: 'Ubuntu',            css: 'Ubuntu, Arial, sans-serif',                                  fb: 'sans-serif' },
+  { re: /^rubik/i,               name: 'Rubik',             css: 'Rubik, Arial, sans-serif',                                   fb: 'sans-serif' },
+  { re: /^karla/i,               name: 'Karla',             css: 'Karla, Arial, sans-serif',                                   fb: 'sans-serif' },
+  { re: /^mulish/i,              name: 'Mulish',            css: 'Mulish, Arial, sans-serif',                                  fb: 'sans-serif' },
+  { re: /^manrope/i,             name: 'Manrope',           css: 'Manrope, Arial, sans-serif',                                 fb: 'sans-serif' },
+  { re: /^dmsans/i,              name: 'DM Sans',           css: '"DM Sans", Arial, sans-serif',                               fb: 'sans-serif' },
+  { re: /^merriweather/i,        name: 'Merriweather',      css: 'Merriweather, Georgia, serif',                               fb: 'serif' },
+  { re: /^playfair/i,            name: 'Playfair Display',  css: '"Playfair Display", Georgia, serif',                         fb: 'serif' },
+  { re: /^lora/i,                name: 'Lora',              css: 'Lora, Georgia, serif',                                       fb: 'serif' },
+  { re: /^ptserif/i,             name: 'PT Serif',          css: '"PT Serif", Georgia, serif',                                 fb: 'serif' },
+  { re: /^crimson/i,             name: 'Crimson Text',      css: '"Crimson Text", Georgia, serif',                             fb: 'serif' },
+  { re: /^notoserif/i,           name: 'Noto Serif',        css: '"Noto Serif", Georgia, serif',                               fb: 'serif' },
+  { re: /^bitter/i,              name: 'Bitter',            css: 'Bitter, Georgia, serif',                                     fb: 'serif' },
+  { re: /^jetbrainsmono/i,       name: 'JetBrains Mono',    css: '"JetBrains Mono", Consolas, monospace',                      fb: 'monospace' },
+  { re: /^firacode/i,            name: 'Fira Code',         css: '"Fira Code", Consolas, monospace',                           fb: 'monospace' },
+  { re: /^sourcecodepro/i,       name: 'Source Code Pro',   css: '"Source Code Pro", Consolas, monospace',                     fb: 'monospace' },
+  { re: /^ibmplexmono/i,         name: 'IBM Plex Mono',     css: '"IBM Plex Mono", Consolas, monospace',                       fb: 'monospace' },
+  { re: /^robotomono/i,          name: 'Roboto Mono',       css: '"Roboto Mono", Consolas, monospace',                         fb: 'monospace' },
+  { re: /^oswald/i,              name: 'Oswald',            css: 'Oswald, "Arial Narrow", sans-serif',                         fb: 'sans-serif' },
+  { re: /^bebasneue/i,           name: 'Bebas Neue',        css: '"Bebas Neue", Impact, sans-serif',                           fb: 'sans-serif' },
+  { re: /^lobster/i,             name: 'Lobster',           css: 'Lobster, cursive',                                           fb: 'cursive' },
+  { re: /^pacifico/i,            name: 'Pacifico',          css: 'Pacifico, cursive',                                          fb: 'cursive' },
+  { re: /^dancingscript/i,       name: 'Dancing Script',    css: '"Dancing Script", cursive',                                  fb: 'cursive' },
+  { re: /^greatvibes/i,          name: 'Great Vibes',       css: '"Great Vibes", cursive',                                     fb: 'cursive' },
+  { re: /^caveat/i,              name: 'Caveat',            css: 'Caveat, cursive',                                            fb: 'cursive' },
+  { re: /^satisfy/i,             name: 'Satisfy',           css: 'Satisfy, cursive',                                           fb: 'cursive' },
+  { re: /^menlo/i,               name: 'Menlo',             css: 'Menlo, Monaco, Consolas, monospace',                         fb: 'monospace' },
+  { re: /^monaco/i,              name: 'Monaco',            css: 'Monaco, Menlo, Consolas, monospace',                         fb: 'monospace' },
+  { re: /^andalemono/i,          name: 'Andale Mono',       css: '"Andale Mono", Consolas, monospace',                         fb: 'monospace' },
+  { re: /^inconsolata/i,         name: 'Inconsolata',       css: 'Inconsolata, Consolas, monospace',                           fb: 'monospace' },
+  { re: /^spacemono/i,           name: 'Space Mono',        css: '"Space Mono", Consolas, monospace',                          fb: 'monospace' },
+  { re: /^ubuntumono/i,          name: 'Ubuntu Mono',       css: '"Ubuntu Mono", Consolas, monospace',                         fb: 'monospace' },
+  { re: /^cascadia/i,            name: 'Cascadia Code',     css: '"Cascadia Code", Consolas, monospace',                       fb: 'monospace' },
+  { re: /^dejavusansmono|^dejavumono/i, name: 'DejaVu Sans Mono', css: '"DejaVu Sans Mono", Consolas, monospace',              fb: 'monospace' },
+  { re: /^dejavusans/i,          name: 'DejaVu Sans',       css: '"DejaVu Sans", Verdana, sans-serif',                         fb: 'sans-serif' },
+  { re: /^dejavuserif/i,         name: 'DejaVu Serif',      css: '"DejaVu Serif", Georgia, serif',                             fb: 'serif' },
+  { re: /^notosans/i,            name: 'Noto Sans',         css: '"Noto Sans", Arial, sans-serif',                             fb: 'sans-serif' },
+  { re: /^symbol/i,              name: 'Symbol',            css: 'Symbol, serif',                                              fb: 'serif' },
+  { re: /^zapfdingbats|^dingbats/i, name: 'Zapf Dingbats',  css: '"Zapf Dingbats", cursive',                                   fb: 'cursive' },
+  { re: /^wingdings/i,           name: 'Wingdings',         css: 'Wingdings, "Zapf Dingbats", cursive',                        fb: 'cursive' },
+  { re: /^webdings/i,            name: 'Webdings',          css: 'Webdings, "Zapf Dingbats", cursive',                         fb: 'cursive' },
+];
+
+function stripStyleSuffixes(name) {
+  let s = name;
+  const suffixes = [
+    '-BoldItalic', '-BoldOblique', '-Bold', '-Italic', '-Oblique',
+    ' Bold Italic', ' Bold', ' Italic', ' Oblique',
+    'BoldItalic', 'Bold', 'Italic', 'Oblique',
+    '-Regular', ' Regular', '-Roman', ' Roman',
+  ];
+  for (const suf of suffixes) {
+    if (s.endsWith(suf)) {
+      s = s.slice(0, -suf.length);
+      break;
+    }
   }
-  return { family, isBold, isItalic, cssFallback };
+  s = s.replace(/(MT|PS|MS|Std|Pro)$/i, '').trim();
+  return s;
+}
+
+function parseFontFallback(rawName) {
+  const original = (rawName || 'Helvetica').replace(/^[A-Z]{6}\+/, '');
+  const isBold = /bold|black|heavy|semibold|demibold|extrabold/i.test(original);
+  const isItalic = /italic|oblique/i.test(original);
+
+  const detectedFamily = stripStyleSuffixes(original) || 'Helvetica';
+  const normalized = detectedFamily.toLowerCase().replace(/[\s\-_]/g, '');
+
+  for (const entry of FONT_FAMILY_MAP) {
+    if (entry.re.test(normalized)) {
+      return {
+        family: entry.css,
+        detectedFamily: entry.name,
+        isBold,
+        isItalic,
+        cssFallback: entry.fb,
+      };
+    }
+  }
+
+  return {
+    family: `"${detectedFamily}", Arial, sans-serif`,
+    detectedFamily,
+    isBold,
+    isItalic,
+    cssFallback: 'sans-serif',
+  };
 }
 
 function cssStackFromFamily(family) {
-  const f = (family || '').toLowerCase();
-  if (f.includes('times') || f.includes('georgia')) {
-    return '"Times New Roman", Times, "Liberation Serif", Georgia, serif';
+  if (!family) return 'Arial, Helvetica, sans-serif';
+  const f = family.toLowerCase();
+  let fallback = 'Arial, Helvetica, sans-serif';
+  if (/serif|garamond|baskerville|times|georgia|cambria|merriweather|playfair|lora|bitter|noto serif|crimson|palatino|bookman|century|caslon|minion|constantia/.test(f)) {
+    fallback = '"Times New Roman", Georgia, serif';
+  } else if (/mono|courier|consolas|menlo|monaco|jetbrains|fira|source code|ibm plex|inconsolata|space mono|cascadia/.test(f)) {
+    fallback = 'Consolas, "Courier New", monospace';
+  } else if (/cursive|script|lobster|pacifico|dancing|great vibes|caveat|satisfy/.test(f)) {
+    fallback = 'cursive';
   }
-  if (f.includes('courier')) {
-    return '"Courier New", Courier, "Liberation Mono", monospace';
-  }
-  if (f.includes('helvetica') || f.includes('arial') || f.includes('calibri') || f.includes('verdana')) {
-    return 'Arial, Helvetica, "Liberation Sans", sans-serif';
-  }
-  return 'Arial, Helvetica, sans-serif';
+  return `"${family}", ${fallback}`;
 }
 
 function getRealFontName(page, fontId) {
@@ -84,9 +195,6 @@ function formatFileSize(bytes) {
   return bytes < k * k ? `${(bytes / k).toFixed(1)} KB` : `${(bytes / (k * k)).toFixed(2)} MB`;
 }
 
-// ---------------------------------------------------------------------------
-// Coordinate transforms
-// ---------------------------------------------------------------------------
 function pdfXYToCanvas(pdfX, pdfYTopDown, transform, pageView) {
   const [a, b, c, d, e, f] = transform;
   const pdfYBottom = pageView[3] - pdfYTopDown;
@@ -101,9 +209,6 @@ function canvasXYToPdf(cx, cy, transform, pageView) {
   return [pdfX, pageView[3] - pdfYBottom];
 }
 
-// ---------------------------------------------------------------------------
-// Baseline measurement
-// ---------------------------------------------------------------------------
 const _baselineCache = {};
 function getBaselineFromTop(cssFont, fontPx, lineHeightPx) {
   const key = `${cssFont}|${fontPx.toFixed(2)}|${lineHeightPx.toFixed(2)}`;
@@ -139,7 +244,7 @@ function sampleSpanColor(ctx, span) {
 }
 
 // ---------------------------------------------------------------------------
-// contentEditable text editor
+// contentEditable box — sizes to its text, no fixed width
 // ---------------------------------------------------------------------------
 function TextEditBox({ initialText, style, onInput, onCommit, onCancel, onMouseDownInternal }) {
   const ref = useRef(null);
@@ -189,7 +294,7 @@ function TextEditBox({ initialText, style, onInput, onCommit, onCancel, onMouseD
 }
 
 // ---------------------------------------------------------------------------
-// Quick actions toolbar (drag grip + delete for existing spans)
+// Quick actions toolbar
 // ---------------------------------------------------------------------------
 function QuickActionsToolbar({ onDelete, onMoveStart, position }) {
   return (
@@ -211,9 +316,6 @@ function QuickActionsToolbar({ onDelete, onMoveStart, position }) {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Shape renderer
-// ---------------------------------------------------------------------------
 function ShapeRenderer({ shapeType, strokeColor, strokeWidth, fillColor }) {
   const stroke = rgbToCss(strokeColor);
   const fill = fillColor ? rgbToCss(fillColor) : 'none';
@@ -240,9 +342,6 @@ function ShapeRenderer({ shapeType, strokeColor, strokeWidth, fillColor }) {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Shape toolbar (stroke color, width, fill)
-// ---------------------------------------------------------------------------
 function ShapeColorButton({ value, onChange, title, allowNone }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
@@ -329,9 +428,6 @@ function ShapeToolbar({ addition, onChange, onDelete, onMoveStart, position }) {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Tools bar (Add Text + Shapes dropdown)
-// ---------------------------------------------------------------------------
 function ToolsBar({ toolMode, setToolMode }) {
   const [shapesOpen, setShapesOpen] = useState(false);
   const shapesWrapRef = useRef(null);
@@ -460,8 +556,6 @@ function cssStackFor(span, style) {
   return span.cssFont;
 }
 
-// Uses span.fontRaw (real PDF font name), NEVER the CSS stack.
-// The CSS stack contains 'sans-serif', which incorrectly matched 'serif'.
 function composeBackendFontName(span, style) {
   const bold = style?.bold != null ? style.bold : span.isBold;
   const italic = style?.italic != null ? style.italic : span.isItalic;
@@ -542,10 +636,7 @@ function buildEdit(span, draftText, activeStyle) {
     newText: String(draftText),
     fontName: composeBackendFontName(span, activeStyle),
     originalFontName: span.fontRaw,
-    // Preserve original PDF font ONLY if the user hasn't touched
-    // any font-affecting property.
-    preserveOriginalFont:
-      !familyExplicit && !boldChanged && !italicChanged,
+    preserveOriginalFont: !familyExplicit && !boldChanged && !italicChanged,
     familyExplicit,
     bold: boldChanged ? activeStyle.bold : span.isBold,
     italic: italicChanged ? activeStyle.italic : span.isItalic,
@@ -562,7 +653,6 @@ function buildEdit(span, draftText, activeStyle) {
     outlineColor: activeStyle.outlineColor || null,
     outlineWidth: activeStyle.outlineWidth ?? 0,
     direction: activeStyle.direction || 'auto',
-    // Persisted overrides for re-editing
     overrideFontFamily: activeStyle.fontFamily,
     overrideFontSize: activeStyle.fontSize,
     overrideBold: activeStyle.bold,
@@ -584,7 +674,9 @@ function buildEdit(span, draftText, activeStyle) {
 
 function emptyActiveStyle() {
   return {
-    fontFamily: null, fontSize: null, bold: null, italic: null,
+    fontFamily: null,
+    detectedFontFamily: null,
+    fontSize: null, bold: null, italic: null,
     underline: false, strike: false, superscript: false, subscript: false,
     color: null, align: 'left', lineSpacing: null, charSpacing: null, hScale: null,
     outlineColor: null, outlineWidth: 0, direction: 'auto',
@@ -593,7 +685,7 @@ function emptyActiveStyle() {
 }
 
 // ===========================================================================
-// MAIN COMPONENT
+// MAIN
 // ===========================================================================
 export default function EditPdfStudio({ tool, file, onBack }) {
   const pdfDocRef = useRef(null);
@@ -645,7 +737,6 @@ export default function EditPdfStudio({ tool, file, onBack }) {
     additions, selectedAdditionId, editingAdditionId, additionDraftText,
   };
 
-  // Reset per file
   useEffect(() => {
     setUserZoomed(false);
     setZoom(0.5);
@@ -661,7 +752,6 @@ export default function EditPdfStudio({ tool, file, onBack }) {
     setActiveStyle(emptyActiveStyle());
   }, [file]);
 
-  // Escape key
   useEffect(() => {
     const onKey = (e) => {
       if (e.key !== 'Escape') return;
@@ -675,7 +765,6 @@ export default function EditPdfStudio({ tool, file, onBack }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [toolMode, editingAdditionId, selectedAdditionId, selectedId]);
 
-  // Viewer size
   useEffect(() => {
     const el = viewerOuterRef.current;
     if (!el) return;
@@ -687,7 +776,6 @@ export default function EditPdfStudio({ tool, file, onBack }) {
     return () => { if (ro) ro.disconnect(); window.removeEventListener('resize', update); };
   }, [loading, loadFailed, result]);
 
-  // Auto-fit
   useEffect(() => {
     if (userZoomed || result) return;
     if (!naturalPageSize.width || !naturalPageSize.height) return;
@@ -700,7 +788,6 @@ export default function EditPdfStudio({ tool, file, onBack }) {
     if (Math.abs(clamped - zoom) > 0.01) setZoom(clamped);
   }, [naturalPageSize, viewerSize, userZoomed, zoom, result]);
 
-  // Load PDF
   useEffect(() => {
     let cancelled = false;
     pdfDocRef.current = null;
@@ -738,7 +825,6 @@ export default function EditPdfStudio({ tool, file, onBack }) {
     return () => { cancelled = true; };
   }, [file]);
 
-  // Render page + extract spans
   useEffect(() => {
     if (loading || !pdfDocRef.current || loadFailed || result) return;
     let cancelled = false;
@@ -805,7 +891,7 @@ export default function EditPdfStudio({ tool, file, onBack }) {
           const realFontName = getRealFontName(page, item.fontName);
           const rawFont = realFontName || styleInfo.fontFamily || item.fontName || 'Helvetica';
           const fallback = parseFontFallback(rawFont);
-          const cssFontStack = `"${item.fontName}", ${fallback.family}, ${fallback.cssFallback}`;
+          const cssFontStack = `"${item.fontName}", ${fallback.family}`;
           const yBaselineTopDownPdf = viewY1 - pdfYBaseline;
           const span = {
             id: `s-${currentPage}-${idx++}`, page: currentPage, text: item.str,
@@ -813,7 +899,9 @@ export default function EditPdfStudio({ tool, file, onBack }) {
             pdfX, pdfYBaselineTopDown: yBaselineTopDownPdf, pdfFontSize: fontSize,
             pdfWidth: item.width || 0,
             fontRaw: rawFont, fontName: item.fontName,
-            fontFamily: fallback.family, isBold: fallback.isBold, isItalic: fallback.isItalic,
+            fontFamily: fallback.family,
+            detectedFamily: fallback.detectedFamily,
+            isBold: fallback.isBold, isItalic: fallback.isItalic,
             cssFont: cssFontStack, color: [0, 0, 0],
           };
           span.color = sampleSpanColor(ctx, span);
@@ -833,7 +921,6 @@ export default function EditPdfStudio({ tool, file, onBack }) {
     return () => { cancelled = true; };
   }, [loading, loadFailed, currentPage, zoom, result]);
 
-  // Toolbar position
   useEffect(() => {
     if (!selectedId) { setToolbarPos({ x: -9999, y: -9999 }); return; }
     const span = spans.find((s) => s.id === selectedId);
@@ -862,7 +949,6 @@ export default function EditPdfStudio({ tool, file, onBack }) {
     };
   }, [selectedId, spans, activeStyle, zoom]);
 
-  // Addition toolbar position
   const [additionToolbarPos, setAdditionToolbarPos] = useState({ x: -9999, y: -9999 });
   useEffect(() => {
     if (!selectedAdditionId) { setAdditionToolbarPos({ x: -9999, y: -9999 }); return; }
@@ -893,7 +979,6 @@ export default function EditPdfStudio({ tool, file, onBack }) {
     };
   }, [selectedAdditionId, additions, viewportTransform, pageView]);
 
-  // Begin editing an existing span
   const beginEdit = (span) => {
     if (selectedId && selectedId !== span.id) commitEdit();
     setSelectedAdditionId(null);
@@ -904,6 +989,7 @@ export default function EditPdfStudio({ tool, file, onBack }) {
       setDraftText(existing.newText);
       setActiveStyle({
         fontFamily: existing.overrideFontFamily ?? null,
+        detectedFontFamily: span.detectedFamily ?? null,
         fontSize: existing.overrideFontSize ?? null,
         bold: existing.overrideBold ?? null,
         italic: existing.overrideItalic ?? null,
@@ -926,6 +1012,7 @@ export default function EditPdfStudio({ tool, file, onBack }) {
       setDraftText(span.text);
       setActiveStyle({
         fontFamily: null,
+        detectedFontFamily: span.detectedFamily ?? null,
         fontSize: span.pdfFontSize,
         bold: span.isBold,
         italic: span.isItalic,
@@ -947,12 +1034,12 @@ export default function EditPdfStudio({ tool, file, onBack }) {
     }
   };
 
-  // Begin editing a text addition
   const beginEditAddition = (add) => {
     setSelectedId(null);
     setSelectedAdditionId(add.id);
     setActiveStyle({
       fontFamily: add.fontName || null,
+      detectedFontFamily: null,
       fontSize: add.fontSize ?? null,
       bold: add.bold ?? null,
       italic: add.italic ?? null,
@@ -1032,7 +1119,6 @@ export default function EditPdfStudio({ tool, file, onBack }) {
     setSelectedId(null);
   };
 
-  // Route sidebar changes → span edit OR text addition
   const handleStyleChange = (newStyle) => {
     setActiveStyle(newStyle);
     const s = stateRef.current;
@@ -1083,7 +1169,6 @@ export default function EditPdfStudio({ tool, file, onBack }) {
     else if (selectedAdditionId) deleteAddition(selectedAdditionId);
   };
 
-  // Create text addition
   const createTextAddition = (canvasX, canvasY) => {
     const [pdfX, pdfYTop] = canvasXYToPdf(canvasX, canvasY, viewportTransform, pageView);
     const id = `add-text-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -1105,7 +1190,8 @@ export default function EditPdfStudio({ tool, file, onBack }) {
     setAdditionDraftText('');
     setToolMode(null);
     setActiveStyle({
-      fontFamily: 'Helvetica', fontSize: defaultSize,
+      fontFamily: 'Helvetica', detectedFontFamily: null,
+      fontSize: defaultSize,
       bold: false, italic: false, underline: false,
       strike: false, superscript: false, subscript: false,
       color: [0, 0, 0], align: 'left',
@@ -1133,7 +1219,6 @@ export default function EditPdfStudio({ tool, file, onBack }) {
     setActiveStyle(emptyActiveStyle());
   };
 
-  // Page mousedown (drawing)
   const handlePageMouseDown = (e) => {
     if (!toolMode || !pageContainerRef.current) return;
     if (e.target.closest('[data-in-edit-toolbar]')) return;
@@ -1235,7 +1320,6 @@ export default function EditPdfStudio({ tool, file, onBack }) {
     window.addEventListener('pointerup', onUp);
   };
 
-  // Outside-click commit
   useEffect(() => {
     const onDocMouseDown = (e) => {
       if (stateRef.current.selectedId) {
@@ -1257,7 +1341,6 @@ export default function EditPdfStudio({ tool, file, onBack }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Move grip for existing span
   const handleMoveStart = (e) => {
     e.preventDefault();
     e.stopPropagation();
@@ -1301,7 +1384,6 @@ export default function EditPdfStudio({ tool, file, onBack }) {
   const handleZoomOut = () => { setUserZoomed(true); setZoom((z) => Math.max(0.2, +(z - 0.2).toFixed(2))); };
   const handleFitToScreen = () => setUserZoomed(false);
 
-  // Save
   const handleSave = async () => {
     if (stateRef.current.selectedId) {
       try { flushSync(() => commitEdit()); } catch { commitEdit(); }
@@ -1379,7 +1461,6 @@ export default function EditPdfStudio({ tool, file, onBack }) {
   const totalEdits = Object.keys(edits).length + additions.filter((a) => a.page === currentPage).length;
   const pageHasSpans = spans.length > 0;
 
-  // Sidebar label + state
   const selectedSpan = selectedId ? spans.find((s) => s.id === selectedId) : null;
   const selectedAddition = selectedAdditionId ? additions.find((a) => a.id === selectedAdditionId) : null;
   const selectionLabel =
@@ -1442,12 +1523,12 @@ export default function EditPdfStudio({ tool, file, onBack }) {
   }
 
   // =========================================================================
-  // EDITOR
+  // EDITOR — fits viewport, no page scrollbar
   // =========================================================================
   return (
-    <div className="bg-slate-50 min-h-screen flex flex-col">
-      <header className="sticky top-0 z-30 bg-white/90 backdrop-blur-md border-b border-slate-200">
-        <div className="max-w-7xl mx-auto px-3 sm:px-6 h-14 sm:h-16 flex items-center justify-between gap-3">
+    <div className="bg-slate-50 h-screen flex flex-col overflow-hidden">
+      <header className="shrink-0 bg-white/90 backdrop-blur-md border-b border-slate-200 z-30">
+        <div className="max-w-[1600px] mx-auto px-3 sm:px-6 h-14 flex items-center justify-between gap-3">
           <button onClick={handleBack} className="flex items-center space-x-1.5 text-slate-600 hover:text-slate-900 font-semibold text-xs sm:text-sm px-2.5 py-1.5 rounded-xl hover:bg-slate-100 transition cursor-pointer">
             <ArrowLeft className="w-4 h-4" /><span>Back to Home</span>
           </button>
@@ -1474,18 +1555,18 @@ export default function EditPdfStudio({ tool, file, onBack }) {
         </div>
       </header>
 
-      <main className="flex-1 max-w-[1600px] mx-auto w-full px-3 sm:px-4 py-4 sm:py-6 flex flex-col space-y-3">
+      <main className="flex-1 min-h-0 max-w-[1600px] mx-auto w-full px-3 sm:px-4 py-3 flex flex-col space-y-2 overflow-hidden">
         {errorMsg && (
-          <div className="p-3 bg-amber-50 border border-amber-200 rounded-2xl text-xs text-amber-900 flex items-start space-x-2.5">
+          <div className="shrink-0 p-2.5 bg-amber-50 border border-amber-200 rounded-2xl text-xs text-amber-900 flex items-start space-x-2.5">
             <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
             <p className="flex-1 font-medium">{errorMsg}</p>
           </div>
         )}
 
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 flex-1 min-h-0">
           {/* Viewer */}
           <div ref={viewerOuterRef}
-            className="lg:col-span-9 bg-slate-200/60 rounded-3xl border border-slate-200 p-2 sm:p-4 flex flex-col items-center justify-center relative overflow-hidden h-[calc(100vh-160px)] min-h-[420px]">
+            className="lg:col-span-9 bg-slate-200/60 rounded-3xl border border-slate-200 p-2 sm:p-3 flex flex-col items-center justify-center relative overflow-hidden min-h-0 h-full">
             {pageDataUrl && !rendering && !loading && <ToolsBar toolMode={toolMode} setToolMode={setToolMode} />}
 
             {loading || rendering ? (
@@ -1529,7 +1610,6 @@ export default function EditPdfStudio({ tool, file, onBack }) {
                       const isSelected = selectedId === span.id;
                       const isModified = Boolean(edit);
 
-                      // Cover at ORIGINAL position
                       const origLineH = span.fontPx * 1.15;
                       const origBaseFromTop = getBaselineFromTop(span.cssFont, span.fontPx, origLineH);
                       const origLeft = span.canvasX;
@@ -1562,21 +1642,12 @@ export default function EditPdfStudio({ tool, file, onBack }) {
                       const lineHeightMult = eff.lineSpacing ?? 1.15;
                       const lineHeightPx = fontPx * lineHeightMult;
                       const baseFromTop = getBaselineFromTop(cssFont, fontPx, lineHeightPx);
+                      const top = baselinePx - baseFromTop;
 
-                      // ---- Alignment box: page-wide when align != left ----
                       const effAlign = eff.align || 'left';
                       const useWideBox = effAlign === 'center' || effAlign === 'right' || effAlign === 'justify';
 
-                      let boxLeft, boxWidth;
-                      if (useWideBox) {
-                        boxLeft = 4;
-                        boxWidth = pageDims.width - 8;
-                      } else {
-                        const scaleFactor = fontPx / Math.max(span.fontPx, 1);
-                        boxLeft = span.canvasX + offsetPx.x;
-                        boxWidth = Math.max(span.widthPx * scaleFactor, 12);
-                      }
-                      const top = baselinePx - baseFromTop;
+                      const boxLeft = useWideBox ? 4 : (span.canvasX + offsetPx.x);
 
                       const displayText = isModified ? edit.newText : span.text;
 
@@ -1585,14 +1656,9 @@ export default function EditPdfStudio({ tool, file, onBack }) {
                       if (eff.underline) decorations.push('underline');
                       if (eff.strike) decorations.push('line-through');
 
-                      const textStyle = {
-                        left: `${boxLeft}px`,
-                        top: `${top}px`,
-                        width: `${boxWidth}px`,
-                        height: `${lineHeightPx}px`,
-                        lineHeight: `${lineHeightPx}px`,
-                        fontSize: `${fontPx}px`,
+                      const commonFontStyle = {
                         fontFamily: cssFont,
+                        fontSize: `${fontPx}px`,
                         fontWeight: eff.bold ? 'bold' : 'normal',
                         fontStyle: eff.italic ? 'italic' : 'normal',
                         textDecoration: decorations.length ? decorations.join(' ') : 'none',
@@ -1600,6 +1666,7 @@ export default function EditPdfStudio({ tool, file, onBack }) {
                         textAlign: effAlign,
                         letterSpacing: eff.charSpacing ? `${eff.charSpacing * zoom}px` : 'normal',
                         direction: eff.direction === 'rtl' ? 'rtl' : 'ltr',
+                        lineHeight: `${lineHeightPx}px`,
                         whiteSpace: 'pre',
                         padding: 0, margin: 0, boxSizing: 'border-box',
                         transform: hScaleRatio !== 1 ? `scaleX(${hScaleRatio})` : undefined,
@@ -1610,44 +1677,59 @@ export default function EditPdfStudio({ tool, file, onBack }) {
                             : undefined,
                       };
 
+                      // ---------- EDITING ----------
+                                            // ---------- EDITING ----------
                       if (isSelected) {
                         return (
                           <React.Fragment key={span.id}>
                             {coverNode}
-                            <div data-in-edit-box="1" className="absolute z-30"
-                              style={{ ...textStyle, outline: isMoving ? '1.5px dashed #3b82f6' : '1.5px solid #3b82f6', outlineOffset: '0px' }}>
-                              <TextEditBox
-                                initialText={draftText}
-                                onInput={(v) => setDraftText(typeof v === 'string' ? v : '')}
-                                onCommit={commitEdit} onCancel={cancelEdit}
-                                style={{
-                                  position: 'absolute', left: 0, top: 0, width: '100%', height: '100%',
-                                  padding: 0, margin: 0, border: 'none', outline: 'none',
-                                  backgroundColor: 'transparent',
-                                  fontFamily: cssFont, fontSize: `${fontPx}px`,
-                                  fontWeight: eff.bold ? 'bold' : 'normal',
-                                  fontStyle: eff.italic ? 'italic' : 'normal',
-                                  textDecoration: decorations.length ? decorations.join(' ') : 'none',
-                                  color: rgbToCss(eff.color),
-                                  textAlign: effAlign,
-                                  letterSpacing: eff.charSpacing ? `${eff.charSpacing * zoom}px` : 'normal',
-                                  lineHeight: `${lineHeightPx}px`,
-                                  boxSizing: 'border-box', whiteSpace: 'pre',
-                                  overflow: 'visible', cursor: isMoving ? 'move' : 'text',
-                                }}
-                              />
-                            </div>
+                            <TextEditBox
+                              initialText={draftText}
+                              onInput={(v) => setDraftText(typeof v === 'string' ? v : '')}
+                              onCommit={commitEdit} onCancel={cancelEdit}
+                              style={{
+                                ...commonFontStyle,
+                                position: 'absolute',
+                                left: `${boxLeft}px`,
+                                top: `${top}px`,
+                                minWidth: useWideBox ? `${pageDims.width - 8}px` : '12px',
+                                maxWidth: useWideBox ? undefined : `${Math.max(20, pageDims.width - boxLeft - 4)}px`,
+                                width: useWideBox ? `${pageDims.width - 8}px` : 'auto',
+                                minHeight: `${lineHeightPx}px`,
+                                display: 'inline-block',
+                                zIndex: 30,
+                                outline: isMoving ? '1.5px dashed #3b82f6' : '1.5px solid #3b82f6',
+                                outlineOffset: '0px',
+                                backgroundColor: 'transparent',
+                                overflow: 'visible',
+                                cursor: isMoving ? 'move' : 'text',
+                              }}
+                            />
                           </React.Fragment>
                         );
                       }
 
+                      // ---------- MODIFIED ----------
                       if (isModified) {
                         if (edit.newText === '') {
                           return (
                             <React.Fragment key={span.id}>
                               {coverNode}
-                              <div className="absolute z-30 cursor-text group" style={textStyle}
-                                onClick={() => beginEdit(span)} title="Deleted — click to edit">
+                              <div
+                                className="absolute z-30 cursor-text group"
+                                style={{
+                                  ...commonFontStyle,
+                                  position: 'absolute',
+                                  left: `${boxLeft}px`,
+                                  top: `${top}px`,
+                                  minWidth: '12px',
+                                  minHeight: `${lineHeightPx}px`,
+                                  display: 'inline-block',
+                                  zIndex: 30,
+                                }}
+                                onClick={() => beginEdit(span)}
+                                title="Deleted — click to edit"
+                              >
                                 <span className="hidden group-hover:flex absolute inset-0 items-center justify-center text-[10px] font-bold text-rose-500 bg-rose-50/80 rounded-[2px]">deleted</span>
                               </div>
                             </React.Fragment>
@@ -1656,9 +1738,22 @@ export default function EditPdfStudio({ tool, file, onBack }) {
                         return (
                           <React.Fragment key={span.id}>
                             {coverNode}
-                            <div className="absolute z-30 cursor-text group"
-                              style={textStyle}
-                              onClick={() => beginEdit(span)} title="Click to edit">
+                            <div
+                              className="absolute z-30 cursor-text group"
+                              style={{
+                                ...commonFontStyle,
+                                position: 'absolute',
+                                left: `${boxLeft}px`,
+                                top: `${top}px`,
+                                minWidth: useWideBox ? `${pageDims.width - 8}px` : '12px',
+                                width: useWideBox ? `${pageDims.width - 8}px` : 'auto',
+                                minHeight: `${lineHeightPx}px`,
+                                display: 'inline-block',
+                                zIndex: 30,
+                              }}
+                              onClick={() => beginEdit(span)}
+                              title="Click to edit"
+                            >
                               <span className="relative block">{String(displayText ?? '') || '\u00A0'}</span>
                               {!useWideBox && (
                                 <span className="absolute -top-1.5 -right-1.5 hidden group-hover:flex items-center justify-center w-4 h-4 bg-blue-600 text-white rounded-full text-[10px] font-bold">✎</span>
@@ -1668,11 +1763,38 @@ export default function EditPdfStudio({ tool, file, onBack }) {
                         );
                       }
 
+                      // ---------- UNMODIFIED (click target) ----------
+                      // Invisible inline-block sized to the exact text width
+                      const unmodLineHeight = span.fontPx * 1.15;
+                      const unmodBaseFromTop = getBaselineFromTop(span.cssFont, span.fontPx, unmodLineHeight);
+                      const unmodTop = span.canvasYBaseline - unmodBaseFromTop;
+
                       return (
-                        <div key={span.id}
+                        <div
+                          key={span.id}
                           className="absolute z-10 cursor-text hover:bg-blue-500/15 rounded-[2px] transition-colors"
-                          style={textStyle}
-                          onClick={() => beginEdit(span)} title="Click to edit" />
+                          style={{
+                            position: 'absolute',
+                            left: `${span.canvasX}px`,
+                            top: `${unmodTop}px`,
+                            minWidth: '12px',
+                            display: 'inline-block',
+                            fontFamily: span.cssFont,
+                            fontSize: `${span.fontPx}px`,
+                            fontWeight: span.isBold ? 'bold' : 'normal',
+                            fontStyle: span.isItalic ? 'italic' : 'normal',
+                            lineHeight: `${unmodLineHeight}px`,
+                            whiteSpace: 'pre',
+                            color: 'transparent',
+                            padding: 0, margin: 0,
+                            boxSizing: 'border-box',
+                            userSelect: 'none',
+                          }}
+                          onClick={() => beginEdit(span)}
+                          title="Click to edit"
+                        >
+                          {span.text}
+                        </div>
                       );
                     })}
                   </div>
@@ -1701,7 +1823,6 @@ export default function EditPdfStudio({ tool, file, onBack }) {
                         const baseFromTop = getBaselineFromTop(cssFont, fontPx, lineHeightPx);
                         const [tx, tyBase] = pdfXYToCanvas(add.bbox.x0, add.bbox.y1, viewportTransform, pageView);
                         const textTop = tyBase - baseFromTop;
-                        const minTextW = Math.max(60, (add.text?.length || 4) * fontPx * 0.55);
 
                         const decorations = [];
                         if (add.underline) decorations.push('underline');
@@ -1711,9 +1832,6 @@ export default function EditPdfStudio({ tool, file, onBack }) {
                         const useAddWideBox =
                           addAlign === 'center' || addAlign === 'right' || addAlign === 'justify';
                         const addBoxLeft = useAddWideBox ? 4 : tx - 4;
-                        const addBoxWidth = useAddWideBox
-                          ? pageDims.width - 8
-                          : Math.max(minTextW, 40);
 
                         return (
                           <div key={add.id} data-addition-node="1"
@@ -1721,9 +1839,10 @@ export default function EditPdfStudio({ tool, file, onBack }) {
                               position: 'absolute',
                               left: `${addBoxLeft}px`,
                               top: `${textTop - 4}px`,
-                              minWidth: `${addBoxWidth}px`,
-                              width: useAddWideBox ? `${addBoxWidth}px` : undefined,
-                              height: `${lineHeightPx + 8}px`,
+                              minWidth: useAddWideBox ? `${pageDims.width - 8}px` : '40px',
+                              width: useAddWideBox ? `${pageDims.width - 8}px` : 'auto',
+                              display: 'inline-block',
+                              minHeight: `${lineHeightPx + 8}px`,
                               pointerEvents: 'auto',
                               cursor: isEditing ? 'text' : 'move',
                               outline: isSel ? '1.5px solid #3b82f6' : '1px dashed rgba(59,130,246,0.35)',
@@ -1751,9 +1870,12 @@ export default function EditPdfStudio({ tool, file, onBack }) {
                                 onCancel={() => setEditingAdditionId(null)}
                                 onMouseDownInternal={(e) => e.stopPropagation()}
                                 style={{
-                                  position: 'absolute', left: '4px', top: '4px',
-                                  minWidth: '60px', minHeight: `${lineHeightPx}px`,
-                                  padding: 0, margin: 0, border: 'none',
+                                  position: 'relative',
+                                  display: 'inline-block',
+                                  minWidth: '40px',
+                                  minHeight: `${lineHeightPx}px`,
+                                  padding: '4px',
+                                  margin: 0, border: 'none',
                                   outline: 'none', background: 'white',
                                   fontFamily: cssFont, fontSize: `${fontPx}px`,
                                   fontWeight: add.bold ? 'bold' : 'normal',
@@ -1768,8 +1890,8 @@ export default function EditPdfStudio({ tool, file, onBack }) {
                             ) : (
                               <span
                                 style={{
-                                  position: 'absolute', left: '4px', top: '4px',
-                                  right: '4px',
+                                  display: 'inline-block',
+                                  padding: '4px',
                                   fontFamily: cssFont, fontSize: `${fontPx}px`,
                                   fontWeight: add.bold ? 'bold' : 'normal',
                                   fontStyle: add.italic ? 'italic' : 'normal',
@@ -1804,7 +1926,6 @@ export default function EditPdfStudio({ tool, file, onBack }) {
                         );
                       }
 
-                      // Shape
                       return (
                         <div key={add.id} data-addition-node="1"
                           style={{
@@ -1875,7 +1996,6 @@ export default function EditPdfStudio({ tool, file, onBack }) {
               </div>
             )}
 
-            {/* Floating page controls */}
             {pageDataUrl && !rendering && !loading && (
               <div className="absolute bottom-3 left-1/2 -translate-x-1/2 bg-slate-900/90 backdrop-blur-md text-white px-3 py-1.5 rounded-2xl flex items-center space-x-2 text-xs shadow-xl z-40">
                 <button onClick={() => setCurrentPage((p) => Math.max(1, p - 1))} disabled={currentPage <= 1}
@@ -1904,60 +2024,54 @@ export default function EditPdfStudio({ tool, file, onBack }) {
             )}
           </div>
 
-          {/* Right column — Format sidebar */}
-          <div className="lg:col-span-3 space-y-3" data-format-sidebar="1">
-            <TextFormatSidebar
-              activeStyle={activeStyle}
-              onChange={handleStyleChange}
-              isActive={hasTextSelection}
-              selectionLabel={selectionLabel}
-              onDelete={hasTextSelection ? handleDeleteSelected : undefined}
-            />
+          {/* Sidebar — internally scrollable */}
+          <div className="lg:col-span-3 min-h-0 h-full" data-format-sidebar="1">
+            <div className="h-full overflow-y-auto space-y-3 pr-1">
+              <TextFormatSidebar
+                activeStyle={activeStyle}
+                onChange={handleStyleChange}
+                isActive={hasTextSelection}
+                selectionLabel={selectionLabel}
+                onDelete={hasTextSelection ? handleDeleteSelected : undefined}
+              />
 
-            {totalEdits > 0 && (
-              <div className="bg-white border border-slate-200 rounded-3xl p-4 shadow-sm">
-                <div className="flex items-center justify-between mb-3">
-                  <h3 className="font-bold text-slate-900 text-sm">Changes on this page</h3>
-                  <button onClick={() => { clearEditsOnPage(); setAdditions((prev) => prev.filter((a) => a.page !== currentPage)); }}
-                    className="text-[10px] font-bold text-rose-600 hover:text-rose-700 underline cursor-pointer">
-                    Clear page
-                  </button>
-                </div>
-                <div className="space-y-2 max-h-[280px] overflow-y-auto pr-1">
-                  {Object.entries(edits).filter(([, e]) => e.page === currentPage).map(([id, e]) => (
-                    <div key={id} className="p-2 bg-slate-50 border border-slate-200 rounded-xl flex items-start justify-between gap-2 text-[11px]">
-                      <div className="flex-1 min-w-0">
-                        <p className="text-slate-400 truncate">Was: {String(e.originalText ?? '')}</p>
-                        <p className="text-slate-800 font-semibold truncate">Now: {typeof e.newText === 'string' && e.newText ? e.newText : '∅ (deleted)'}</p>
+              {totalEdits > 0 && (
+                <div className="bg-white border border-slate-200 rounded-3xl p-4 shadow-sm">
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="font-bold text-slate-900 text-sm">Changes on this page</h3>
+                    <button onClick={() => { clearEditsOnPage(); setAdditions((prev) => prev.filter((a) => a.page !== currentPage)); }}
+                      className="text-[10px] font-bold text-rose-600 hover:text-rose-700 underline cursor-pointer">
+                      Clear page
+                    </button>
+                  </div>
+                  <div className="space-y-2 max-h-[280px] overflow-y-auto pr-1">
+                    {Object.entries(edits).filter(([, e]) => e.page === currentPage).map(([id, e]) => (
+                      <div key={id} className="p-2 bg-slate-50 border border-slate-200 rounded-xl flex items-start justify-between gap-2 text-[11px]">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-slate-400 truncate">Was: {String(e.originalText ?? '')}</p>
+                          <p className="text-slate-800 font-semibold truncate">Now: {typeof e.newText === 'string' && e.newText ? e.newText : '∅ (deleted)'}</p>
+                        </div>
+                        <button onClick={() => revertEdit(id)} className="p-1 text-slate-400 hover:text-rose-600 rounded cursor-pointer shrink-0" title="Revert">
+                          <RotateCcw className="w-3 h-3" />
+                        </button>
                       </div>
-                      <button onClick={() => revertEdit(id)} className="p-1 text-slate-400 hover:text-rose-600 rounded cursor-pointer shrink-0" title="Revert">
-                        <RotateCcw className="w-3 h-3" />
-                      </button>
-                    </div>
-                  ))}
-                  {additions.filter((a) => a.page === currentPage).map((a) => (
-                    <div key={a.id} className="p-2 bg-blue-50/50 border border-blue-200 rounded-xl flex items-start justify-between gap-2 text-[11px]">
-                      <div className="flex-1 min-w-0">
-                        <p className="text-blue-500 font-bold uppercase text-[9px]">New {a.type}</p>
-                        <p className="text-slate-800 font-semibold truncate">
-                          {a.type === 'text' ? (a.text || '∅') : `Shape: ${a.shapeType}`}
-                        </p>
+                    ))}
+                    {additions.filter((a) => a.page === currentPage).map((a) => (
+                      <div key={a.id} className="p-2 bg-blue-50/50 border border-blue-200 rounded-xl flex items-start justify-between gap-2 text-[11px]">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-blue-500 font-bold uppercase text-[9px]">New {a.type}</p>
+                          <p className="text-slate-800 font-semibold truncate">
+                            {a.type === 'text' ? (a.text || '∅') : `Shape: ${a.shapeType}`}
+                          </p>
+                        </div>
+                        <button onClick={() => deleteAddition(a.id)} className="p-1 text-slate-400 hover:text-rose-600 rounded cursor-pointer shrink-0" title="Delete">
+                          <Trash2 className="w-3 h-3" />
+                        </button>
                       </div>
-                      <button onClick={() => deleteAddition(a.id)} className="p-1 text-slate-400 hover:text-rose-600 rounded cursor-pointer shrink-0" title="Delete">
-                        <Trash2 className="w-3 h-3" />
-                      </button>
-                    </div>
-                  ))}
+                    ))}
+                  </div>
                 </div>
-              </div>
-            )}
-
-            <div className="bg-sky-50 border border-sky-200 rounded-3xl p-3 text-[11px] text-sky-900 flex items-start space-x-2">
-              <Info className="w-3.5 h-3.5 text-sky-600 shrink-0 mt-0.5" />
-              <p className="leading-relaxed">
-                Bold, italic, underline, strikethrough, super/subscript, spacing, alignment
-                and colour are all written into the final PDF.
-              </p>
+              )}
             </div>
           </div>
         </div>

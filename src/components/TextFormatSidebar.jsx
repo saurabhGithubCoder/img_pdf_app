@@ -2,21 +2,64 @@ import React, { useState, useRef, useEffect } from 'react';
 import {
   Bold, Italic, Underline, Strikethrough, Superscript, Subscript,
   AlignLeft, AlignCenter, AlignRight, AlignJustify,
-  Trash2, Undo2, Redo2, Copy,
+  Trash2, Sparkles,
 } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
-// Constants
+// Font catalogue — grouped for the dropdown
 // ---------------------------------------------------------------------------
-const FONT_FAMILIES = [
-  { value: 'Helvetica', label: 'Helvetica / Arial' },
-  { value: 'Times',     label: 'Times New Roman' },
-  { value: 'Courier',   label: 'Courier New' },
-  { value: 'Georgia',   label: 'Georgia' },
-  { value: 'Verdana',   label: 'Verdana' },
-  { value: 'Calibri',   label: 'Calibri' },
+const FONT_GROUPS = [
+  {
+    group: 'System',
+    fonts: [
+      'Arial', 'Helvetica', 'Times New Roman', 'Courier New',
+      'Georgia', 'Verdana', 'Tahoma', 'Trebuchet MS', 'Calibri', 'Cambria',
+    ],
+  },
+  {
+    group: 'Sans-Serif',
+    fonts: [
+      'Roboto', 'Open Sans', 'Lato', 'Montserrat', 'Poppins', 'Inter',
+      'Nunito', 'Raleway', 'Work Sans', 'Ubuntu', 'Rubik', 'Karla',
+      'Mulish', 'Manrope', 'DM Sans',
+    ],
+  },
+  {
+    group: 'Serif',
+    fonts: [
+      'Merriweather', 'Playfair Display', 'Lora', 'PT Serif', 'Crimson Text',
+      'Libre Baskerville', 'EB Garamond', 'Cormorant Garamond', 'Noto Serif',
+      'Bitter',
+    ],
+  },
+  {
+    group: 'Monospace',
+    fonts: [
+      'JetBrains Mono', 'Fira Code', 'Source Code Pro', 'IBM Plex Mono',
+      'Roboto Mono',
+    ],
+  },
+  {
+    group: 'Display',
+    fonts: [
+      'Oswald', 'Bebas Neue', 'Lobster', 'Pacifico',
+      'Dancing Script', 'Great Vibes', 'Caveat', 'Satisfy',
+    ],
+  },
 ];
 
+const GOOGLE_FONTS = new Set([
+  ...FONT_GROUPS[1].fonts,
+  ...FONT_GROUPS[2].fonts,
+  ...FONT_GROUPS[3].fonts,
+  ...FONT_GROUPS[4].fonts,
+]);
+
+const SYSTEM_FONTS = new Set(FONT_GROUPS[0].fonts);
+
+// ---------------------------------------------------------------------------
+// Color helpers
+// ---------------------------------------------------------------------------
 const SWATCHES = [
   [0, 0, 0],
   [0.5, 0.5, 0.5],
@@ -111,23 +154,25 @@ export default function TextFormatSidebar({
 
   const disabled = !isActive;
   const effColor = activeStyle.color || [0, 0, 0];
-
   const patch = (p) => onChange({ ...activeStyle, ...p });
-
-  const setBold = () => patch({ bold: !activeStyle.bold });
-  const setItalic = () => patch({ italic: !activeStyle.italic });
-  const setUnderline = () => patch({ underline: !activeStyle.underline });
-  const setStrike = () => patch({ strike: !activeStyle.strike });
-  const setSuperscript = () => patch({ superscript: !activeStyle.superscript, subscript: false });
-  const setSubscript = () => patch({ superscript: false, subscript: !activeStyle.subscript });
 
   const activeCls = (v) =>
     v ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100';
 
   const disabledCls = disabled ? 'opacity-40 pointer-events-none select-none' : '';
 
+  // ---- Detected font info (Option 2) ----
+  const detectedFont = activeStyle.detectedFontFamily || null;
+  const isDetectedInList =
+    detectedFont && (
+      GOOGLE_FONTS.has(detectedFont) ||
+      SYSTEM_FONTS.has(detectedFont)
+    );
+  const isDetectedGoogle =
+    detectedFont && GOOGLE_FONTS.has(detectedFont);
+
   return (
-    <div className="h-[calc(100vh-160px)] overflow-y-auto bg-white border border-slate-200 rounded-3xl shadow-sm flex flex-col overflow-hidden">
+    <div className="bg-white border border-slate-200 rounded-3xl shadow-sm flex flex-col overflow-hidden">
       {/* Header */}
       <div className="px-4 py-3 border-b border-slate-100 bg-slate-50/80">
         <h3 className="text-[11px] font-bold uppercase tracking-widest text-slate-500">Format</h3>
@@ -149,9 +194,21 @@ export default function TextFormatSidebar({
               onChange={(e) => patch({ fontFamily: e.target.value || null })}
               className="flex-1 min-w-0 px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-medium focus:outline-none focus:ring-2 focus:ring-blue-500/20"
             >
-              <option value="">Original</option>
-              {FONT_FAMILIES.map((f) => (
-                <option key={f.value} value={f.value}>{f.label}</option>
+              <option value="">
+                {detectedFont ? `Original (${detectedFont})` : 'Original'}
+              </option>
+              {FONT_GROUPS.map((grp) => (
+                <optgroup key={grp.group} label={grp.group}>
+                  {grp.fonts.map((f) => (
+                    <option
+                      key={f}
+                      value={f}
+                      style={{ fontFamily: `"${f}", sans-serif` }}
+                    >
+                      {f}
+                    </option>
+                  ))}
+                </optgroup>
               ))}
             </select>
             <input
@@ -163,23 +220,45 @@ export default function TextFormatSidebar({
               className="w-14 px-2 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-medium text-center focus:outline-none focus:ring-2 focus:ring-blue-500/20"
             />
           </div>
+
+          {/* Option 2 — Detected font hint */}
+          {detectedFont && !activeStyle.fontFamily && (
+            <div className="mt-1.5 flex items-start gap-1.5 text-[10px] leading-tight">
+              <Sparkles className="w-3 h-3 text-emerald-500 shrink-0 mt-0.5" />
+              <p className="text-slate-500">
+                Detected:{' '}
+                <strong className="font-semibold text-slate-700">{detectedFont}</strong>
+                {isDetectedGoogle && ' (Google Fonts)'}
+                {!isDetectedInList && (
+                  <span className="text-slate-400"> — system font, will be preserved</span>
+                )}
+              </p>
+            </div>
+          )}
+
+          {activeStyle.fontFamily && (
+            <p className="text-[10px] text-slate-400 mt-1.5 truncate">
+              {GOOGLE_FONTS.has(activeStyle.fontFamily)
+                ? 'Loaded from Google Fonts CDN'
+                : SYSTEM_FONTS.has(activeStyle.fontFamily)
+                ? 'System font'
+                : 'Custom font'}
+            </p>
+          )}
         </Section>
 
         {/* COLOR */}
         <Section title="Color">
           <div className="flex items-center gap-2 flex-wrap">
             {SWATCHES.map((c, i) => {
-              const isActive =
-                c.every((v, k) => Math.abs(v - effColor[k]) < 0.02);
+              const isActive = c.every((v, k) => Math.abs(v - effColor[k]) < 0.02);
               return (
                 <button
                   key={i}
                   type="button"
                   onClick={() => patch({ color: c })}
                   className={`w-6 h-6 rounded-full border transition ${
-                    isActive
-                      ? 'ring-2 ring-blue-500 ring-offset-2 border-white'
-                      : 'border-slate-300 hover:scale-110'
+                    isActive ? 'ring-2 ring-blue-500 ring-offset-2 border-white' : 'border-slate-300 hover:scale-110'
                   }`}
                   style={{ background: rgbToCss(c) }}
                 />
@@ -189,12 +268,11 @@ export default function TextFormatSidebar({
               <button
                 type="button"
                 onClick={() => setPaletteOpen((v) => !v)}
-                className="w-6 h-6 rounded-full border border-slate-300 flex items-center justify-center"
-                title="Custom color"
+                className="w-6 h-6 rounded-full border border-slate-300"
                 style={{
-                  background:
-                    'conic-gradient(from 0deg, #ef4444, #f59e0b, #eab308, #22c55e, #06b6d4, #3b82f6, #8b5cf6, #ec4899, #ef4444)',
+                  background: 'conic-gradient(from 0deg, #ef4444, #f59e0b, #eab308, #22c55e, #06b6d4, #3b82f6, #8b5cf6, #ec4899, #ef4444)',
                 }}
+                title="Custom color"
               />
               {paletteOpen && (
                 <div className="absolute top-full right-0 mt-2 p-2 bg-white border border-slate-200 rounded-xl shadow-2xl grid grid-cols-4 gap-1.5 z-50">
@@ -246,27 +324,27 @@ export default function TextFormatSidebar({
         {/* STYLE */}
         <Section title="Style">
           <div className="grid grid-cols-6 gap-1">
-            <button type="button" onClick={setBold} title="Bold"
+            <button type="button" onClick={() => patch({ bold: !activeStyle.bold })} title="Bold"
               className={`h-8 rounded-lg flex items-center justify-center transition ${activeCls(activeStyle.bold)}`}>
               <Bold className="w-3.5 h-3.5" />
             </button>
-            <button type="button" onClick={setItalic} title="Italic"
+            <button type="button" onClick={() => patch({ italic: !activeStyle.italic })} title="Italic"
               className={`h-8 rounded-lg flex items-center justify-center transition ${activeCls(activeStyle.italic)}`}>
               <Italic className="w-3.5 h-3.5" />
             </button>
-            <button type="button" onClick={setUnderline} title="Underline"
+            <button type="button" onClick={() => patch({ underline: !activeStyle.underline })} title="Underline"
               className={`h-8 rounded-lg flex items-center justify-center transition ${activeCls(activeStyle.underline)}`}>
               <Underline className="w-3.5 h-3.5" />
             </button>
-            <button type="button" onClick={setStrike} title="Strikethrough"
+            <button type="button" onClick={() => patch({ strike: !activeStyle.strike })} title="Strikethrough"
               className={`h-8 rounded-lg flex items-center justify-center transition ${activeCls(activeStyle.strike)}`}>
               <Strikethrough className="w-3.5 h-3.5" />
             </button>
-            <button type="button" onClick={setSuperscript} title="Superscript"
+            <button type="button" onClick={() => patch({ superscript: !activeStyle.superscript, subscript: false })} title="Superscript"
               className={`h-8 rounded-lg flex items-center justify-center transition ${activeCls(activeStyle.superscript)}`}>
               <Superscript className="w-3.5 h-3.5" />
             </button>
-            <button type="button" onClick={setSubscript} title="Subscript"
+            <button type="button" onClick={() => patch({ superscript: false, subscript: !activeStyle.subscript })} title="Subscript"
               className={`h-8 rounded-lg flex items-center justify-center transition ${activeCls(activeStyle.subscript)}`}>
               <Subscript className="w-3.5 h-3.5" />
             </button>
@@ -297,31 +375,7 @@ export default function TextFormatSidebar({
           </div>
         </Section>
 
-        {/* DIRECTION */}
-        <Section title="Direction">
-          <div className="grid grid-cols-3 gap-1 p-0.5 bg-slate-100 rounded-lg">
-            {[
-              { v: 'auto', label: 'Auto' },
-              { v: 'ltr', label: 'LTR' },
-              { v: 'rtl', label: 'RTL' },
-            ].map(({ v, label }) => (
-              <button
-                key={v}
-                type="button"
-                onClick={() => patch({ direction: v })}
-                className={`py-1.5 rounded-md text-[11px] font-bold transition ${
-                  (activeStyle.direction || 'auto') === v
-                    ? 'bg-white text-blue-600 shadow-sm'
-                    : 'text-slate-500 hover:text-slate-800'
-                }`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        </Section>
-
-                {/* OUTLINE */}
+        {/* OUTLINE */}
         <Section title="Outline">
           <div className="flex items-center gap-2">
             <button
@@ -334,9 +388,7 @@ export default function TextFormatSidebar({
                 }
               }}
               className={`w-7 h-7 rounded-full border-2 flex items-center justify-center transition ${
-                activeStyle.outlineColor
-                  ? 'border-blue-500 ring-2 ring-blue-500/30'
-                  : 'border-slate-300'
+                activeStyle.outlineColor ? 'border-blue-500 ring-2 ring-blue-500/30' : 'border-slate-300'
               }`}
               style={{
                 background: activeStyle.outlineColor
@@ -358,6 +410,30 @@ export default function TextFormatSidebar({
               className="w-14 px-2 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-medium text-center focus:outline-none focus:ring-2 focus:ring-blue-500/20"
             />
             <span className="text-[11px] text-slate-500">pt</span>
+          </div>
+        </Section>
+
+        {/* DIRECTION */}
+        <Section title="Direction">
+          <div className="grid grid-cols-3 gap-1 p-0.5 bg-slate-100 rounded-lg">
+            {[
+              { v: 'auto', label: 'Auto' },
+              { v: 'ltr', label: 'LTR' },
+              { v: 'rtl', label: 'RTL' },
+            ].map(({ v, label }) => (
+              <button
+                key={v}
+                type="button"
+                onClick={() => patch({ direction: v })}
+                className={`py-1.5 rounded-md text-[11px] font-bold transition ${
+                  (activeStyle.direction || 'auto') === v
+                    ? 'bg-white text-blue-600 shadow-sm'
+                    : 'text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
           </div>
         </Section>
 

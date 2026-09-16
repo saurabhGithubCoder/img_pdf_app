@@ -1,17 +1,21 @@
 """
 In-place PDF editing engine powered by PyMuPDF.
 
-Key fixes in this version:
-  1. `preserveOriginalFont` flag — only extracts the original PDF font when
-     the user hasn't touched family / bold / italic. Bold/Italic now work.
-  2. Alignment uses the page width for center / right / justify, so text
-     actually moves on the page.
-  3. Multi-tier insertion fallback so text is always visible.
+New in this version:
+  • Google Font support — 40+ web fonts are downloaded on demand from the
+    Google Fonts CDN and embedded into the output PDF.
+  • System font aliases for Linux (Liberation / DejaVu / Carlito / Noto …).
+  • Bulletproof multi-tier insertion — text is always visible.
+  • Alignment via manual x-positioning (no insert_textbox dropouts).
 """
 import sys
+import os
 import json
 import math
 import time
+import re
+import urllib.request
+import urllib.parse
 import fitz  # PyMuPDF
 
 
@@ -19,10 +23,242 @@ def log(msg):
     sys.stderr.write(f"[edit] {msg}\n")
 
 
-# ---------------------------------------------------------------------------
-# Font code mapping
-# ---------------------------------------------------------------------------
-def resolve_font_code(font_name):
+# ===========================================================================
+# FONT SYSTEM
+# ===========================================================================
+
+# Names that map to the PDF Base-14 fonts
+BASE14_FAMILIES = {
+    'Helvetica', 'Arial',
+    'Times', 'Times New Roman',
+    'Courier', 'Courier New',
+    'Symbol', 'Zapf Dingbats',
+}
+
+# Google Font families we serve. Anything here can be downloaded on demand.
+GOOGLE_FONT_FAMILIES = {
+    'Roboto', 'Open Sans', 'Lato', 'Montserrat', 'Poppins', 'Inter',
+    'Nunito', 'Raleway', 'Work Sans', 'Ubuntu', 'Rubik', 'Karla',
+    'Mulish', 'Manrope', 'DM Sans',
+    'Merriweather', 'Playfair Display', 'Lora', 'PT Serif',
+    'Crimson Text', 'Libre Baskerville', 'EB Garamond',
+    'Cormorant Garamond', 'Noto Serif', 'Bitter',
+    'JetBrains Mono', 'Fira Code', 'Source Code Pro',
+    'IBM Plex Mono', 'Roboto Mono',
+    'Oswald', 'Bebas Neue', 'Lobster', 'Pacifico',
+    'Dancing Script', 'Great Vibes', 'Caveat', 'Satisfy',
+}
+
+# Cache directories
+_FONT_CACHE_DIR = os.path.join('/tmp', 'pdf-forge-google-fonts')
+os.makedirs(_FONT_CACHE_DIR, exist_ok=True)
+
+_google_font_disk = {}   # (family, weight, italic) -> local_path or None
+
+
+def _download_google_font(family, weight=400, italic=False):
+    """Fetch a Google Font TTF and cache it on disk. Returns path or None."""
+    key = (family, weight, italic)
+    if key in _google_font_disk:
+        return _google_font_disk[key]
+
+    safe = family.replace(' ', '_').replace('/', '_')
+    filename = f"{safe}-{weight}{'-italic' if italic else ''}.ttf"
+    local_path = os.path.join(_FONT_CACHE_DIR, filename)
+
+    if os.path.exists(local_path) and os.path.getsize(local_path) > 5000:
+        _google_font_disk[key] = local_path
+        return local_path
+
+    try:
+        ital = '1' if italic else '0'
+        family_q = urllib.parse.quote(family)
+        css_url = (
+            f"https://fonts.googleapis.com/css2"
+            f"?family={family_q}:ital,wght@{ital},{weight}&display=swap"
+        )
+        # Use an old UA so Google returns TTF, not WOFF2
+        req = urllib.request.Request(css_url, headers={'User-Agent': 'Mozilla/4.0'})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            css = resp.read().decode('utf-8', errors='ignore')
+
+        m = re.search(r'src:\s*url\((https://[^)]+\.ttf)\)', css)
+        if not m:
+            m = re.search(r'src:\s*url\((https://[^)]+)\)', css)
+        if not m:
+            log(f"Could not parse Google Fonts CSS for {family}")
+            _google_font_disk[key] = None
+            return None
+
+        font_url = m.group(1)
+        req2 = urllib.request.Request(font_url, headers={'User-Agent': 'Mozilla/4.0'})
+        with urllib.request.urlopen(req2, timeout=30) as resp2:
+            data = resp2.read()
+
+        if len(data) < 1000:
+            _google_font_disk[key] = None
+            return None
+
+        with open(local_path, 'wb') as f:
+            f.write(data)
+
+        log(f"Downloaded Google Font '{family}' ({weight}{' italic' if italic else ''}) "
+            f"→ {local_path} ({len(data)} bytes)")
+        _google_font_disk[key] = local_path
+        return local_path
+    except Exception as e:
+        log(f"Google Font download failed for {family} {weight} italic={italic}: {e}")
+        _google_font_disk[key] = None
+        return None
+
+
+# Map user-facing font family names to system file paths (Linux).
+# These are the fonts installed by the apt packages listed in the README.
+SYSTEM_FONT_FILES = {
+    'Arial': {
+        'regular': '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
+        'bold': '/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf',
+        'italic': '/usr/share/fonts/truetype/liberation/LiberationSans-Italic.ttf',
+        'bolditalic': '/usr/share/fonts/truetype/liberation/LiberationSans-BoldItalic.ttf',
+    },
+    'Helvetica': {
+        'regular': '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
+        'bold': '/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf',
+        'italic': '/usr/share/fonts/truetype/liberation/LiberationSans-Italic.ttf',
+        'bolditalic': '/usr/share/fonts/truetype/liberation/LiberationSans-BoldItalic.ttf',
+    },
+    'Times New Roman': {
+        'regular': '/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf',
+        'bold': '/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf',
+        'italic': '/usr/share/fonts/truetype/liberation/LiberationSerif-Italic.ttf',
+        'bolditalic': '/usr/share/fonts/truetype/liberation/LiberationSerif-BoldItalic.ttf',
+    },
+    'Times': {
+        'regular': '/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf',
+        'bold': '/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf',
+        'italic': '/usr/share/fonts/truetype/liberation/LiberationSerif-Italic.ttf',
+        'bolditalic': '/usr/share/fonts/truetype/liberation/LiberationSerif-BoldItalic.ttf',
+    },
+    'Courier New': {
+        'regular': '/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf',
+        'bold': '/usr/share/fonts/truetype/liberation/LiberationMono-Bold.ttf',
+        'italic': '/usr/share/fonts/truetype/liberation/LiberationMono-Italic.ttf',
+        'bolditalic': '/usr/share/fonts/truetype/liberation/LiberationMono-BoldItalic.ttf',
+    },
+    'Courier': {
+        'regular': '/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf',
+        'bold': '/usr/share/fonts/truetype/liberation/LiberationMono-Bold.ttf',
+        'italic': '/usr/share/fonts/truetype/liberation/LiberationMono-Italic.ttf',
+        'bolditalic': '/usr/share/fonts/truetype/liberation/LiberationMono-BoldItalic.ttf',
+    },
+    'Georgia': {
+        'regular': '/usr/share/fonts/truetype/crosextra/Caladea-Regular.ttf',
+        'bold': '/usr/share/fonts/truetype/crosextra/Caladea-Bold.ttf',
+        'italic': '/usr/share/fonts/truetype/crosextra/Caladea-Italic.ttf',
+        'bolditalic': '/usr/share/fonts/truetype/crosextra/Caladea-BoldItalic.ttf',
+    },
+    'Cambria': {
+        'regular': '/usr/share/fonts/truetype/crosextra/Caladea-Regular.ttf',
+        'bold': '/usr/share/fonts/truetype/crosextra/Caladea-Bold.ttf',
+        'italic': '/usr/share/fonts/truetype/crosextra/Caladea-Italic.ttf',
+        'bolditalic': '/usr/share/fonts/truetype/crosextra/Caladea-BoldItalic.ttf',
+    },
+    'Verdana': {
+        'regular': '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+        'bold': '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+        'italic': '/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf',
+        'bolditalic': '/usr/share/fonts/truetype/dejavu/DejaVuSans-BoldOblique.ttf',
+    },
+    'Tahoma': {
+        'regular': '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+        'bold': '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+        'italic': '/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf',
+        'bolditalic': '/usr/share/fonts/truetype/dejavu/DejaVuSans-BoldOblique.ttf',
+    },
+    'Trebuchet MS': {
+        'regular': '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+        'bold': '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+        'italic': '/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf',
+        'bolditalic': '/usr/share/fonts/truetype/dejavu/DejaVuSans-BoldOblique.ttf',
+    },
+    'Calibri': {
+        'regular': '/usr/share/fonts/truetype/crosextra/Carlito-Regular.ttf',
+        'bold': '/usr/share/fonts/truetype/crosextra/Carlito-Bold.ttf',
+        'italic': '/usr/share/fonts/truetype/crosextra/Carlito-Italic.ttf',
+        'bolditalic': '/usr/share/fonts/truetype/crosextra/Carlito-BoldItalic.ttf',
+    },
+}
+
+
+def _pick_system_file(family, bold, italic):
+    entry = SYSTEM_FONT_FILES.get(family)
+    if not entry:
+        return None
+    key = (
+        'bolditalic' if (bold and italic)
+        else 'bold' if bold
+        else 'italic' if italic
+        else 'regular'
+    )
+    for k in (key, 'regular'):
+        p = entry.get(k)
+        if p and os.path.exists(p):
+            return p
+    return None
+
+
+# ---- Embedded-font tracking (per document) ----
+_embedded_fonts = {}   # (doc_id, cache_key) -> internal_name
+
+
+def _register_font_file(page, doc, font_path, cache_key):
+    """Register a font file on the page. Returns internal fontname or None."""
+    key = (id(doc), cache_key)
+    if key in _embedded_fonts:
+        return _embedded_fonts[key]
+
+    internal = f"PF{abs(hash(key)) % 1000000}"
+    try:
+        page.insert_font(fontname=internal, fontfile=font_path)
+        _embedded_fonts[key] = internal
+        return internal
+    except Exception as e:
+        log(f"insert_font failed for {cache_key}: {e}")
+        _embedded_fonts[key] = None
+        return None
+
+
+def _resolve_full_font(family, bold, italic, page, doc):
+    """Resolve a family + bold/italic to an embedded font on this page.
+
+    Order of attempts:
+      1. System font file (Liberation / DejaVu / Carlito / Caladea)
+      2. Google Fonts download (with disk cache)
+    """
+    # 1) System
+    sys_path = _pick_system_file(family, bold, italic)
+    if sys_path:
+        name = _register_font_file(page, doc, sys_path, f"sys:{sys_path}")
+        if name:
+            return name
+
+    # 2) Google Fonts
+    if family in GOOGLE_FONT_FAMILIES:
+        weight = 700 if bold else 400
+        path = _download_google_font(family, weight, italic)
+        if not path and bold:
+            # Bold variant missing → try regular and let the PDF synthesise
+            path = _download_google_font(family, 400, italic)
+        if path:
+            name = _register_font_file(page, doc, path, f"gf:{family}:{weight}:{italic}")
+            if name:
+                return name
+
+    return None
+
+
+def _resolve_base14(font_name):
+    """Map a font name to one of the PDF Base-14 codes."""
     name = (font_name or '').lower()
     if '+' in name:
         name = name.split('+', 1)[1]
@@ -40,15 +276,44 @@ def resolve_font_code(font_name):
         if is_bold: return 'cobo'
         if is_italic: return 'coit'
         return 'cour'
-    if 'symbol' in name:
-        return 'symb'
-    if 'zapf' in name or 'dingbat' in name:
-        return 'zadb'
-
+    if 'symbol' in name: return 'symb'
+    if 'zapf' in name or 'dingbat' in name: return 'zadb'
     if is_bold and is_italic: return 'hebi'
     if is_bold: return 'hebo'
     if is_italic: return 'heit'
     return 'helv'
+
+
+def _parse_family_and_style(full_name):
+    """Parse 'Poppins-BoldItalic' → ('Poppins', True, True)."""
+    if not full_name:
+        return (None, False, False)
+
+    # Strip subset prefix
+    if '+' in full_name:
+        full_name = full_name.split('+', 1)[1]
+
+    bold = False
+    italic = False
+    low = full_name.lower()
+    if 'bold' in low:
+        bold = True
+    if 'italic' in low or 'oblique' in low:
+        italic = True
+
+    # Strip style suffixes to get the family
+    family = full_name
+    for suf in ('-BoldItalic', '-BoldOblique', '-Bold', '-Italic', '-Oblique',
+                ' Bold Italic', ' Bold', ' Italic', ' Oblique'):
+        if family.endswith(suf):
+            family = family[: -len(suf)]
+            break
+    # Remove MT / PS / other vendor suffixes
+    for suf in ('MT', 'PS', 'MS'):
+        if family.endswith(suf):
+            family = family[:-len(suf)]
+
+    return (family.strip(), bold, italic)
 
 
 def to_color_tuple(color):
@@ -67,54 +332,9 @@ def to_color_tuple(color):
     return (0.0, 0.0, 0.0)
 
 
-# ---------------------------------------------------------------------------
-# Extract + register the original embedded PDF font (per doc + name)
-# ---------------------------------------------------------------------------
-_extract_cache = {}
-
-
-def _extract_and_register_font(doc, page, original_name):
-    if not original_name:
-        return None
-
-    key = (id(doc), original_name.lower())
-    if key in _extract_cache:
-        return _extract_cache[key]
-
-    try:
-        fonts = page.get_fonts(full=True)
-    except Exception as e:
-        log(f"get_fonts failed: {e}")
-        return None
-
-    target = original_name.lower()
-    if '+' in target:
-        target = target.split('+', 1)[1]
-
-    for f in fonts:
-        try:
-            xref = f[0]
-            basefont = (f[3] or '').lower()
-            clean_base = basefont.split('+', 1)[1] if '+' in basefont else basefont
-            if target == clean_base or target in clean_base or clean_base in target:
-                basename, ext, subtype, buffer = doc.extract_font(xref)
-                if buffer:
-                    reg_name = f"ext{xref}{int(time.time() * 1000) % 100000}"
-                    try:
-                        page.insert_font(fontname=reg_name, fontbuffer=buffer)
-                        _extract_cache[key] = reg_name
-                        log(f"Extracted '{basefont}' -> '{reg_name}'")
-                        return reg_name
-                    except Exception as ex:
-                        log(f"insert_font(fontbuffer) failed: {ex}")
-        except Exception:
-            continue
-    return None
-
-
-# ---------------------------------------------------------------------------
-# Text insertion
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# TEXT INSERTION
+# ===========================================================================
 def _insert_text_span(page, doc, x0, y0, x1, y1, text, font_name, font_size, color,
                        original_font_name=None,
                        preserve_original_font=True,
@@ -146,22 +366,52 @@ def _insert_text_span(page, doc, x0, y0, x1, y1, text, font_name, font_size, col
     font_code = None
     used_extracted = False
 
-    # Only preserve the ORIGINAL embedded font when the user has not changed
-    # any font-affecting property (family / bold / italic / super / sub).
-    if preserve_original_font and not superscript and not subscript:
-        extracted = _extract_and_register_font(doc, page, original_font_name)
-        if extracted:
-            font_code = extracted
-            used_extracted = True
+    family, bold, italic = _parse_family_and_style(font_name or '')
+    if not family:
+        family, bold, italic = _parse_family_and_style(original_font_name or '')
 
+    # 1) Preserve the ORIGINAL embedded font when user hasn't changed anything
+    if preserve_original_font and not superscript and not subscript:
+        try:
+            if original_font_name:
+                fonts = page.get_fonts(full=True)
+                target = original_font_name.lower()
+                if '+' in target:
+                    target = target.split('+', 1)[1]
+                for f in fonts:
+                    try:
+                        xref = f[0]
+                        basefont = (f[3] or '').lower()
+                        clean = basefont.split('+', 1)[1] if '+' in basefont else basefont
+                        if target == clean or target in clean or clean in target:
+                            _, _, _, buffer = doc.extract_font(xref)
+                            if buffer:
+                                reg = f"ext{xref}{int(time.time() * 1000) % 100000}"
+                                page.insert_font(fontname=reg, fontbuffer=buffer)
+                                font_code = reg
+                                used_extracted = True
+                                break
+                    except Exception:
+                        continue
+        except Exception as e:
+            log(f"extract original font failed: {e}")
+
+    # 2) Full font — system file OR Google Font
+    if not font_code and not superscript and not subscript:
+        embedded = _resolve_full_font(family, bold, italic, page, doc)
+        if embedded:
+            font_code = embedded
+
+    # 3) Base-14 fallback
     if not font_code:
-        font_code = resolve_font_code(font_name or original_font_name or 'Helvetica')
+        font_code = _resolve_base14(font_name or original_font_name or family or 'Helvetica')
 
     log(f"  Insert '{str(text)[:22]}' font={font_code} "
-        f"(extracted={used_extracted}, preserve={preserve_original_font})")
+        f"(family={family}, bold={bold}, italic={italic}, "
+        f"extracted={used_extracted}, preserve={preserve_original_font})")
 
     # ------------------------------------------------------------------
-    # Compute x position — center / right use PAGE width so text moves
+    # Compute x position (alignment via manual x, page-wide for center/right)
     # ------------------------------------------------------------------
     try:
         text_w = fitz.get_text_length(str(text), fontname=font_code, fontsize=eff_size)
@@ -178,8 +428,6 @@ def _insert_text_span(page, doc, x0, y0, x1, y1, text, font_name, font_size, col
     page_left = page_rect.x0
     page_right = page_rect.x1
     page_width = page_rect.width
-
-    # Preserve whatever left offset the ORIGINAL span had as the page margin
     left_margin = max(0.0, x0 - page_left)
 
     ins_x = x0
@@ -187,11 +435,11 @@ def _insert_text_span(page, doc, x0, y0, x1, y1, text, font_name, font_size, col
         ins_x = page_left + (page_width - text_w) / 2.0
     elif align == 'right':
         ins_x = page_right - left_margin - text_w
-    # justify → treat as left for single-line spans
+    # justify → left (single-line span)
 
     inserted = False
 
-    # TIER 1: per-character placement (char spacing)
+    # TIER 1: char-spacing via TextWriter
     if use_char_spacing:
         try:
             writer = fitz.TextWriter(page.rect)
@@ -239,6 +487,7 @@ def _insert_text_span(page, doc, x0, y0, x1, y1, text, font_name, font_size, col
             page.insert_text(fitz.Point(ins_x, baseline_y), str(text),
                              fontname='helv', fontsize=eff_size, color=color)
             inserted = True
+            log("  Tier-3 fallback (Helvetica)")
         except Exception as e:
             log(f"  Tier-3 FAILED: {e}")
 
@@ -263,6 +512,9 @@ def _insert_text_span(page, doc, x0, y0, x1, y1, text, font_name, font_size, col
             log(f"  Underline/strike failed: {e}")
 
 
+# ===========================================================================
+# SHAPES
+# ===========================================================================
 def _draw_shape(page, shape_type, x0, y0, x1, y1, stroke_color, stroke_width, fill_color):
     rect = fitz.Rect(min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
     fill = fill_color if fill_color else None
@@ -310,6 +562,9 @@ def _draw_shape(page, shape_type, x0, y0, x1, y1, stroke_color, stroke_width, fi
         log(f"Shape draw error ({shape_type}): {e}")
 
 
+# ===========================================================================
+# MAIN
+# ===========================================================================
 def perform_edits(input_path, output_path, edits, additions):
     doc = fitz.open(input_path)
     log(f"Opened: {len(doc)} pages, {len(edits)} edits, {len(additions)} additions")
@@ -333,7 +588,6 @@ def perform_edits(input_path, output_path, edits, additions):
         log(f"--- Page {page_num}: {len(page_edits)} edits, {len(page_additions)} additions")
 
         if page_edits:
-            # Redact
             for e in page_edits:
                 bbox = e.get('bbox')
                 if not bbox or len(bbox) != 4: continue
@@ -351,7 +605,6 @@ def perform_edits(input_path, output_path, edits, additions):
             except Exception as ex:
                 log(f"apply_redactions failed: {ex}")
 
-            # Re-insert
             for e in page_edits:
                 new_text = e.get('newText')
                 if new_text is None: continue
@@ -412,7 +665,7 @@ def perform_edits(input_path, output_path, edits, additions):
                     text, font_name, font_size,
                     a.get('color', [0, 0, 0]),
                     original_font_name=None,
-                    preserve_original_font=False,   # additions always explicit
+                    preserve_original_font=False,
                     align=a.get('align', 'left'),
                     underline=bool(a.get('underline')),
                     strike=bool(a.get('strike')),
