@@ -1,37 +1,50 @@
 """
 In-place PDF editing engine powered by PyMuPDF.
 
-Handles:
-  - Existing-span edits (redact + re-insert with full styling overrides)
-  - New text additions (place text at absolute position)
-  - New shape additions (rect, ellipse, line, arrow, triangle, diamond)
-
-Now supports: bold, italic, underline, strikethrough, superscript, subscript,
-              alignment, character spacing, horizontal scale, outline, direction.
+Key fixes in this version:
+  1. `preserveOriginalFont` flag — only extracts the original PDF font when
+     the user hasn't touched family / bold / italic. Bold/Italic now work.
+  2. Alignment uses the page width for center / right / justify, so text
+     actually moves on the page.
+  3. Multi-tier insertion fallback so text is always visible.
 """
 import sys
-import os
 import json
 import math
+import time
 import fitz  # PyMuPDF
 
 
+def log(msg):
+    sys.stderr.write(f"[edit] {msg}\n")
+
+
+# ---------------------------------------------------------------------------
+# Font code mapping
+# ---------------------------------------------------------------------------
 def resolve_font_code(font_name):
     name = (font_name or '').lower()
+    if '+' in name:
+        name = name.split('+', 1)[1]
+
     is_bold = any(k in name for k in ('bold', 'black', 'heavy', 'semibold', 'demibold'))
     is_italic = any(k in name for k in ('italic', 'oblique'))
-    if any(k in name for k in ('times', 'serif', 'roman', 'georgia', 'garamond', 'book')):
+
+    if any(k in name for k in ('times', 'georgia', 'garamond', 'cambria', 'minion')):
         if is_bold and is_italic: return 'tibi'
         if is_bold: return 'tibo'
         if is_italic: return 'tiit'
         return 'tiro'
-    if any(k in name for k in ('courier', 'mono', 'consol')):
+    if any(k in name for k in ('courier', 'mono', 'consol', 'menlo')):
         if is_bold and is_italic: return 'cobi'
         if is_bold: return 'cobo'
         if is_italic: return 'coit'
         return 'cour'
-    if 'symbol' in name: return 'symb'
-    if 'zapf' in name or 'dingbat' in name: return 'zadb'
+    if 'symbol' in name:
+        return 'symb'
+    if 'zapf' in name or 'dingbat' in name:
+        return 'zadb'
+
     if is_bold and is_italic: return 'hebi'
     if is_bold: return 'hebo'
     if is_italic: return 'heit'
@@ -54,135 +67,206 @@ def to_color_tuple(color):
     return (0.0, 0.0, 0.0)
 
 
-def _insert_text_span(page, x0, y0, x1, y1, text, font_name, font_size, color,
+# ---------------------------------------------------------------------------
+# Extract + register the original embedded PDF font (per doc + name)
+# ---------------------------------------------------------------------------
+_extract_cache = {}
+
+
+def _extract_and_register_font(doc, page, original_name):
+    if not original_name:
+        return None
+
+    key = (id(doc), original_name.lower())
+    if key in _extract_cache:
+        return _extract_cache[key]
+
+    try:
+        fonts = page.get_fonts(full=True)
+    except Exception as e:
+        log(f"get_fonts failed: {e}")
+        return None
+
+    target = original_name.lower()
+    if '+' in target:
+        target = target.split('+', 1)[1]
+
+    for f in fonts:
+        try:
+            xref = f[0]
+            basefont = (f[3] or '').lower()
+            clean_base = basefont.split('+', 1)[1] if '+' in basefont else basefont
+            if target == clean_base or target in clean_base or clean_base in target:
+                basename, ext, subtype, buffer = doc.extract_font(xref)
+                if buffer:
+                    reg_name = f"ext{xref}{int(time.time() * 1000) % 100000}"
+                    try:
+                        page.insert_font(fontname=reg_name, fontbuffer=buffer)
+                        _extract_cache[key] = reg_name
+                        log(f"Extracted '{basefont}' -> '{reg_name}'")
+                        return reg_name
+                    except Exception as ex:
+                        log(f"insert_font(fontbuffer) failed: {ex}")
+        except Exception:
+            continue
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Text insertion
+# ---------------------------------------------------------------------------
+def _insert_text_span(page, doc, x0, y0, x1, y1, text, font_name, font_size, color,
+                       original_font_name=None,
+                       preserve_original_font=True,
                        align='left', underline=False, strike=False,
                        superscript=False, subscript=False,
                        char_spacing=0.0, h_scale=1.0,
                        outline_color=None, outline_width=0.0):
-    """Insert one styled text span. bbox in PyMuPDF coordinates (top-down)."""
-    font_code = resolve_font_code(font_name)
-    original_size = font_size
+    original_size = float(font_size)
 
     if superscript:
-        font_size = font_size * 0.65
-        baseline_shift = original_size * 0.35
+        eff_size = original_size * 0.65
+        baseline_shift = -original_size * 0.35
     elif subscript:
-        font_size = font_size * 0.65
-        baseline_shift = -original_size * 0.15
+        eff_size = original_size * 0.65
+        baseline_shift = original_size * 0.15
     else:
+        eff_size = original_size
         baseline_shift = 0.0
 
-    # PyMuPDF uses PDF-space y (bottom-up). The bbox given is top-down, but
-    # our caller already converted to PyMuPDF coords by (viewY1 - pdfY).
-    # So y0 (top) < y1 (bottom). Baseline sits near y1 - descent.
-    baseline_y = y1 - 0.2 * font_size + baseline_shift
+    baseline_y = (y1 - 0.15 * original_size) + baseline_shift
+    color = to_color_tuple(color)
+    use_outline = (outline_color is not None and outline_width > 0)
+    use_char_spacing = abs(char_spacing) > 0.01
+    use_h_scale = abs(h_scale - 1.0) > 0.01
 
-    # --- Render mode (fill vs fill+stroke) ---
-    render_mode = 2 if (outline_color and outline_width > 0) else 0
-    stroke_col = to_color_tuple(outline_color) if outline_color else None
+    # ------------------------------------------------------------------
+    # Choose font code
+    # ------------------------------------------------------------------
+    font_code = None
+    used_extracted = False
 
-    # --- Character spacing: manual per-character placement ---
-    use_manual_spacing = abs(char_spacing) > 0.01
+    # Only preserve the ORIGINAL embedded font when the user has not changed
+    # any font-affecting property (family / bold / italic / super / sub).
+    if preserve_original_font and not superscript and not subscript:
+        extracted = _extract_and_register_font(doc, page, original_font_name)
+        if extracted:
+            font_code = extracted
+            used_extracted = True
 
+    if not font_code:
+        font_code = resolve_font_code(font_name or original_font_name or 'Helvetica')
+
+    log(f"  Insert '{str(text)[:22]}' font={font_code} "
+        f"(extracted={used_extracted}, preserve={preserve_original_font})")
+
+    # ------------------------------------------------------------------
+    # Compute x position — center / right use PAGE width so text moves
+    # ------------------------------------------------------------------
     try:
-        if use_manual_spacing:
+        text_w = fitz.get_text_length(str(text), fontname=font_code, fontsize=eff_size)
+        if use_char_spacing:
+            text_w += char_spacing * max(0, len(str(text)) - 1)
+        text_w *= h_scale
+    except Exception:
+        try:
+            text_w = fitz.get_text_length(str(text), fontname='helv', fontsize=eff_size)
+        except Exception:
+            text_w = (x1 - x0)
+
+    page_rect = page.rect
+    page_left = page_rect.x0
+    page_right = page_rect.x1
+    page_width = page_rect.width
+
+    # Preserve whatever left offset the ORIGINAL span had as the page margin
+    left_margin = max(0.0, x0 - page_left)
+
+    ins_x = x0
+    if align == 'center':
+        ins_x = page_left + (page_width - text_w) / 2.0
+    elif align == 'right':
+        ins_x = page_right - left_margin - text_w
+    # justify → treat as left for single-line spans
+
+    inserted = False
+
+    # TIER 1: per-character placement (char spacing)
+    if use_char_spacing:
+        try:
             writer = fitz.TextWriter(page.rect)
             font_obj = fitz.Font(fontname=font_code)
-            x = x0
-            for ch in text:
-                writer.append((x, baseline_y), ch, font=font_obj, fontsize=font_size)
-                ch_w = font_obj.text_length(ch, fontsize=font_size)
-                x += ch_w + char_spacing
+            x = ins_x
+            y = baseline_y
+            for i, line in enumerate(str(text).split('\n')):
+                if i > 0:
+                    x = ins_x
+                    y += eff_size * 1.2
+                for ch in line:
+                    writer.append((x, y), ch, font=font_obj, fontsize=eff_size)
+                    x += font_obj.text_length(ch, fontsize=eff_size) + char_spacing
+            kw = {'color': color}
+            if use_h_scale:
+                kw['morph'] = (fitz.Point(ins_x, baseline_y),
+                               fitz.Matrix(h_scale, 0, 0, 1, 0, 0))
+            writer.write_text(page, **kw)
+            inserted = True
+        except Exception as e:
+            log(f"  Tier-1 failed: {e}")
 
-            # Apply horizontal scale via morph if needed
-            morph = None
-            if abs(h_scale - 1.0) > 0.01:
-                pivot = fitz.Point(x0, baseline_y)
-                matrix = fitz.Matrix(h_scale, 0, 0, 1, 0, 0)
-                morph = (pivot, matrix)
-
-            writer.write_text(page, color=color, morph=morph)
-        else:
-            point = fitz.Point(x0, baseline_y)
-
-            # Alignment: use textbox for non-left
-            if align in ('center', 'right', 'justify') and (x1 - x0) > 5:
-                rect = fitz.Rect(x0, y0, x1, y1)
-                align_enum = {
-                    'center': fitz.TEXT_ALIGN_CENTER,
-                    'right': fitz.TEXT_ALIGN_RIGHT,
-                    'justify': fitz.TEXT_ALIGN_JUSTIFY,
-                }[align]
-
-                kwargs = dict(fontname=font_code, fontsize=font_size,
-                              color=color, align=align_enum)
-                if render_mode == 2:
-                    kwargs['render_mode'] = 2
-                    kwargs['fill'] = color
-                    kwargs['color'] = stroke_col
-                try:
-                    page.insert_textbox(rect, text, **kwargs)
-                except Exception:
-                    page.insert_textbox(rect, text, fontname=font_code,
-                                        fontsize=font_size, color=color, align=align_enum)
-            else:
-                kwargs = dict(fontname=font_code, fontsize=font_size)
-                if render_mode == 2:
-                    kwargs['render_mode'] = 2
-                    kwargs['fill'] = color
-                    kwargs['color'] = stroke_col
-                else:
-                    kwargs['color'] = color
-
-                morph = None
-                if abs(h_scale - 1.0) > 0.01:
-                    pivot = fitz.Point(x0, baseline_y)
-                    matrix = fitz.Matrix(h_scale, 0, 0, 1, 0, 0)
-                    morph = (pivot, matrix)
-                if morph:
-                    kwargs['morph'] = morph
-
-                try:
-                    page.insert_text(point, text, **kwargs)
-                except Exception:
-                    page.insert_text(point, text, fontname='helv',
-                                     fontsize=font_size, color=color)
-
-        # Effective advance width (for underline/strike)
+    # TIER 2: styled insert_text
+    if not inserted:
         try:
-            eff_w = fitz.get_text_length(text, fontname=font_code, fontsize=font_size)
-            if use_manual_spacing:
-                eff_w += char_spacing * max(0, len(text) - 1)
+            point = fitz.Point(ins_x, baseline_y)
+            kw = dict(fontname=font_code, fontsize=eff_size)
+            if use_outline:
+                kw['render_mode'] = 2
+                kw['fill'] = color
+                kw['color'] = to_color_tuple(outline_color)
+            else:
+                kw['color'] = color
+            if use_h_scale:
+                kw['morph'] = (fitz.Point(ins_x, baseline_y),
+                               fitz.Matrix(h_scale, 0, 0, 1, 0, 0))
+            page.insert_text(point, str(text), **kw)
+            inserted = True
+        except Exception as e:
+            log(f"  Tier-2 failed: {e}")
+
+    # TIER 3: bare Helvetica
+    if not inserted:
+        try:
+            page.insert_text(fitz.Point(ins_x, baseline_y), str(text),
+                             fontname='helv', fontsize=eff_size, color=color)
+            inserted = True
+        except Exception as e:
+            log(f"  Tier-3 FAILED: {e}")
+
+    # Decorations
+    if inserted and (underline or strike):
+        try:
+            eff_w = fitz.get_text_length(str(text), fontname=font_code, fontsize=eff_size)
+            if use_char_spacing:
+                eff_w += char_spacing * max(0, len(str(text)) - 1)
             eff_w *= h_scale
-        except Exception:
-            eff_w = (x1 - x0)
-
-        if underline:
-            uy = baseline_y + font_size * 0.15
-            try:
-                page.draw_line(fitz.Point(x0, uy),
-                               fitz.Point(x0 + eff_w, uy),
-                               color=color, width=max(0.5, font_size * 0.05))
-            except Exception:
-                pass
-
-        if strike:
-            sy = baseline_y + font_size * 0.35
-            try:
-                page.draw_line(fitz.Point(x0, sy),
-                               fitz.Point(x0 + eff_w, sy),
-                               color=color, width=max(0.5, font_size * 0.05))
-            except Exception:
-                pass
-    except Exception as e:
-        sys.stderr.write(f"Text insert error: {e}\n")
+            if underline:
+                uy = baseline_y + eff_size * 0.12
+                page.draw_line(fitz.Point(ins_x, uy),
+                               fitz.Point(ins_x + eff_w, uy),
+                               color=color, width=max(0.5, eff_size * 0.05))
+            if strike:
+                sy = baseline_y - eff_size * 0.32
+                page.draw_line(fitz.Point(ins_x, sy),
+                               fitz.Point(ins_x + eff_w, sy),
+                               color=color, width=max(0.5, eff_size * 0.05))
+        except Exception as e:
+            log(f"  Underline/strike failed: {e}")
 
 
 def _draw_shape(page, shape_type, x0, y0, x1, y1, stroke_color, stroke_width, fill_color):
     rect = fitz.Rect(min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
     fill = fill_color if fill_color else None
     w = max(0.5, float(stroke_width))
-
     try:
         if shape_type == 'rect':
             page.draw_rect(rect, color=stroke_color, fill=fill, width=w)
@@ -192,70 +276,64 @@ def _draw_shape(page, shape_type, x0, y0, x1, y1, stroke_color, stroke_width, fi
             page.draw_line(fitz.Point(x0, y0), fitz.Point(x1, y1),
                            color=stroke_color, width=w)
         elif shape_type == 'arrow':
-            p1 = fitz.Point(x0, y0)
-            p2 = fitz.Point(x1, y1)
+            p1, p2 = fitz.Point(x0, y0), fitz.Point(x1, y1)
             page.draw_line(p1, p2, color=stroke_color, width=w)
-            dx = p2.x - p1.x
-            dy = p2.y - p1.y
+            dx, dy = p2.x - p1.x, p2.y - p1.y
             length = max(1e-3, math.hypot(dx, dy))
             ux, uy = dx / length, dy / length
-            arrow_len = min(18.0, max(8.0, length * 0.18))
+            al = min(18.0, max(8.0, length * 0.18))
             for sign in (-1, 1):
                 ang = math.atan2(uy, ux) + sign * math.radians(28)
-                tip_x = p2.x - math.cos(ang) * arrow_len
-                tip_y = p2.y - math.sin(ang) * arrow_len
-                page.draw_line(p2, fitz.Point(tip_x, tip_y), color=stroke_color, width=w)
+                page.draw_line(p2,
+                               fitz.Point(p2.x - math.cos(ang) * al,
+                                          p2.y - math.sin(ang) * al),
+                               color=stroke_color, width=w)
         elif shape_type == 'triangle':
-            points = [
-                fitz.Point((x0 + x1) / 2.0, min(y0, y1)),
-                fitz.Point(max(x0, x1), max(y0, y1)),
-                fitz.Point(min(x0, x1), max(y0, y1)),
-            ]
-            shape = page.new_shape()
-            shape.draw_polyline(points + [points[0]])
-            shape.finish(color=stroke_color, fill=fill, width=w)
-            shape.commit()
+            pts = [fitz.Point((x0 + x1) / 2.0, min(y0, y1)),
+                   fitz.Point(max(x0, x1), max(y0, y1)),
+                   fitz.Point(min(x0, x1), max(y0, y1))]
+            sh = page.new_shape()
+            sh.draw_polyline(pts + [pts[0]])
+            sh.finish(color=stroke_color, fill=fill, width=w)
+            sh.commit()
         elif shape_type == 'diamond':
-            cx = (x0 + x1) / 2.0
-            cy = (y0 + y1) / 2.0
-            points = [
-                fitz.Point(cx, min(y0, y1)),
-                fitz.Point(max(x0, x1), cy),
-                fitz.Point(cx, max(y0, y1)),
-                fitz.Point(min(x0, x1), cy),
-            ]
-            shape = page.new_shape()
-            shape.draw_polyline(points + [points[0]])
-            shape.finish(color=stroke_color, fill=fill, width=w)
-            shape.commit()
+            cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+            pts = [fitz.Point(cx, min(y0, y1)),
+                   fitz.Point(max(x0, x1), cy),
+                   fitz.Point(cx, max(y0, y1)),
+                   fitz.Point(min(x0, x1), cy)]
+            sh = page.new_shape()
+            sh.draw_polyline(pts + [pts[0]])
+            sh.finish(color=stroke_color, fill=fill, width=w)
+            sh.commit()
     except Exception as e:
-        sys.stderr.write(f"Shape draw error ({shape_type}): {e}\n")
+        log(f"Shape draw error ({shape_type}): {e}")
 
 
 def perform_edits(input_path, output_path, edits, additions):
     doc = fitz.open(input_path)
+    log(f"Opened: {len(doc)} pages, {len(edits)} edits, {len(additions)} additions")
 
-    edits_by_page = {}
+    edits_by_page, additions_by_page = {}, {}
     for e in edits:
         try: p = int(e.get('page', 1))
         except Exception: continue
         edits_by_page.setdefault(p, []).append(e)
-
-    additions_by_page = {}
     for a in additions:
         try: p = int(a.get('page', 1))
         except Exception: continue
         additions_by_page.setdefault(p, []).append(a)
 
-    for page_num in set(edits_by_page.keys()) | set(additions_by_page.keys()):
-        if page_num < 1 or page_num > len(doc):
+    for page_num in sorted(set(edits_by_page) | set(additions_by_page)):
+        if not (1 <= page_num <= len(doc)):
             continue
         page = doc[page_num - 1]
         page_edits = edits_by_page.get(page_num, [])
         page_additions = additions_by_page.get(page_num, [])
+        log(f"--- Page {page_num}: {len(page_edits)} edits, {len(page_additions)} additions")
 
-        # STEP 1: Redact originals
         if page_edits:
+            # Redact
             for e in page_edits:
                 bbox = e.get('bbox')
                 if not bbox or len(bbox) != 4: continue
@@ -264,59 +342,55 @@ def perform_edits(input_path, output_path, edits, additions):
                 if y1 < y0: y0, y1 = y1, y0
                 rect = fitz.Rect(x0 - 1.0, y0 - 1.5, x1 + 1.5, y1 + 1.0)
                 bg = to_color_tuple(e.get('bgColor', [1.0, 1.0, 1.0]))
-                try: page.add_redact_annot(rect, fill=bg)
-                except Exception: pass
+                try:
+                    page.add_redact_annot(rect, fill=bg)
+                except Exception as ex:
+                    log(f"add_redact_annot failed: {ex}")
             try:
                 page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
-            except Exception: pass
+            except Exception as ex:
+                log(f"apply_redactions failed: {ex}")
 
-            # STEP 2: Re-insert edited text
+            # Re-insert
             for e in page_edits:
                 new_text = e.get('newText')
                 if new_text is None: continue
                 new_text = str(new_text)
                 if new_text.strip() == '': continue
-
                 bbox = e.get('bbox')
                 if not bbox or len(bbox) != 4: continue
                 x0, y0, x1, y1 = [float(v) for v in bbox]
                 if x1 < x0: x0, x1 = x1, x0
                 if y1 < y0: y0, y1 = y1, y0
 
-                offset_x = float(e.get('offsetX', 0) or 0)
-                offset_y = float(e.get('offsetY', 0) or 0)
-                font_size = float(e.get('fontSize', 11.0)) or 11.0
-                font_name = e.get('fontName', 'Helvetica')
-                color = to_color_tuple(e.get('color', [0.0, 0.0, 0.0]))
-                align = (e.get('align') or 'left').lower()
-                underline = bool(e.get('underline'))
-                strike = bool(e.get('strike'))
-                superscript = bool(e.get('superscript'))
-                subscript = bool(e.get('subscript'))
-                char_spacing = float(e.get('charSpacing', 0) or 0)
-                h_scale = float(e.get('hScale', 100) or 100) / 100.0
-                outline_color = e.get('outlineColor')
-                outline_width = float(e.get('outlineWidth', 0) or 0)
-
                 _insert_text_span(
-                    page,
-                    x0 + offset_x, y0 + offset_y,
-                    x1 + offset_x, y1 + offset_y,
-                    new_text, font_name, font_size, color,
-                    align=align, underline=underline, strike=strike,
-                    superscript=superscript, subscript=subscript,
-                    char_spacing=char_spacing, h_scale=h_scale,
-                    outline_color=outline_color, outline_width=outline_width,
+                    page, doc,
+                    x0 + float(e.get('offsetX', 0) or 0),
+                    y0 + float(e.get('offsetY', 0) or 0),
+                    x1 + float(e.get('offsetX', 0) or 0),
+                    y1 + float(e.get('offsetY', 0) or 0),
+                    new_text,
+                    e.get('fontName', 'Helvetica'),
+                    float(e.get('fontSize', 11.0)) or 11.0,
+                    e.get('color', [0.0, 0.0, 0.0]),
+                    original_font_name=e.get('originalFontName'),
+                    preserve_original_font=bool(e.get('preserveOriginalFont', False)),
+                    align=(e.get('align') or 'left').lower(),
+                    underline=bool(e.get('underline')),
+                    strike=bool(e.get('strike')),
+                    superscript=bool(e.get('superscript')),
+                    subscript=bool(e.get('subscript')),
+                    char_spacing=float(e.get('charSpacing', 0) or 0),
+                    h_scale=float(e.get('hScale', 100) or 100) / 100.0,
+                    outline_color=e.get('outlineColor'),
+                    outline_width=float(e.get('outlineWidth', 0) or 0),
                 )
 
-        # STEP 3: Additions
         for a in page_additions:
             try:
                 bbox = a.get('bbox') or {}
-                x0 = float(bbox.get('x0', 0))
-                y0 = float(bbox.get('y0', 0))
-                x1 = float(bbox.get('x1', 0))
-                y1 = float(bbox.get('y1', 0))
+                x0 = float(bbox.get('x0', 0)); y0 = float(bbox.get('y0', 0))
+                x1 = float(bbox.get('x1', 0)); y1 = float(bbox.get('y1', 0))
             except Exception:
                 continue
 
@@ -325,25 +399,20 @@ def perform_edits(input_path, output_path, edits, additions):
                 if not text: continue
                 font_size = float(a.get('fontSize', 14)) or 14
                 font_name = a.get('fontName', 'Helvetica')
-                color = to_color_tuple(a.get('color', [0, 0, 0]))
-                if a.get('bold') and a.get('italic'):
-                    font_name = f"{font_name}-BoldItalic"
-                elif a.get('bold'):
-                    font_name = f"{font_name}-Bold"
-                elif a.get('italic'):
-                    font_name = f"{font_name}-Italic"
+                if a.get('bold') and a.get('italic'): font_name = f"{font_name}-BoldItalic"
+                elif a.get('bold'): font_name = f"{font_name}-Bold"
+                elif a.get('italic'): font_name = f"{font_name}-Italic"
 
-                ins_y0 = y0
-                ins_y1 = y0 + font_size * 1.0
-                # If the addition uses baseline-as-y1 semantics from frontend
-                if y1 > y0:
-                    ins_y1 = y1
-                    ins_y0 = y1 - font_size * 1.0
+                baseline = y1 if y1 > y0 else y0
+                ins_y0 = baseline - font_size * 0.9
+                ins_y1 = baseline + font_size * 0.15
 
                 _insert_text_span(
-                    page,
-                    x0, ins_y0, x1, ins_y1,
-                    text, font_name, font_size, color,
+                    page, doc, x0, ins_y0, x1, ins_y1,
+                    text, font_name, font_size,
+                    a.get('color', [0, 0, 0]),
+                    original_font_name=None,
+                    preserve_original_font=False,   # additions always explicit
                     align=a.get('align', 'left'),
                     underline=bool(a.get('underline')),
                     strike=bool(a.get('strike')),
@@ -354,31 +423,32 @@ def perform_edits(input_path, output_path, edits, additions):
                     outline_color=a.get('outlineColor'),
                     outline_width=float(a.get('outlineWidth', 0) or 0),
                 )
-
             elif a.get('type') == 'shape':
-                shape_type = a.get('shapeType', 'rect')
-                stroke_color = to_color_tuple(a.get('strokeColor', [0, 0, 0]))
-                stroke_width = float(a.get('strokeWidth', 2) or 2)
-                raw_fill = a.get('fillColor')
-                fill_color = to_color_tuple(raw_fill) if raw_fill else None
-                _draw_shape(page, shape_type, x0, y0, x1, y1,
-                            stroke_color, stroke_width, fill_color)
+                _draw_shape(
+                    page, a.get('shapeType', 'rect'),
+                    x0, y0, x1, y1,
+                    to_color_tuple(a.get('strokeColor', [0, 0, 0])),
+                    float(a.get('strokeWidth', 2) or 2),
+                    to_color_tuple(a['fillColor']) if a.get('fillColor') else None,
+                )
 
-    doc.save(output_path, garbage=4, deflate=True, clean=True)
-    doc.close()
+    try:
+        doc.save(output_path, garbage=4, deflate=True, clean=True)
+        log(f"Saved: {output_path}")
+    except Exception as e:
+        log(f"save failed: {e}")
+        raise
+    finally:
+        doc.close()
 
 
 if __name__ == '__main__':
     if len(sys.argv) < 4:
-        sys.stderr.write(
-            "Usage: python convert_edit_pdf.py <input.pdf> <output.pdf> <edits.json> [additions.json]\n"
-        )
+        log("Usage: convert_edit_pdf.py <in.pdf> <out.pdf> <edits.json> [additions.json]")
         sys.exit(1)
-
     try:
         with open(sys.argv[3], 'r', encoding='utf-8') as f:
             edits = json.load(f)
-
         additions = []
         if len(sys.argv) > 4:
             try:
@@ -386,9 +456,10 @@ if __name__ == '__main__':
                     additions = json.load(f)
             except Exception:
                 additions = []
-
         perform_edits(sys.argv[1], sys.argv[2], edits, additions)
         sys.exit(0)
     except Exception as exc:
-        sys.stderr.write(f"Edit PDF error: {str(exc)}\n")
+        log(f"FATAL: {exc}")
+        import traceback
+        traceback.print_exc(file=sys.stderr)
         sys.exit(1)

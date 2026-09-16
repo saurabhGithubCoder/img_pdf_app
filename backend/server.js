@@ -899,13 +899,24 @@ app.post('/api/edit-pdf', upload.single('file'), async (req, res) => {
     await fs.writeFile(editsPath, JSON.stringify(edits), 'utf-8');
     await fs.writeFile(additionsPath, JSON.stringify(additions), 'utf-8');
 
-    await new Promise((resolve, reject) => {
-      const py = spawn('python3', [pythonScriptPath, inputPdfPath, outputPdfPath, editsPath, additionsPath]);
+        await new Promise((resolve, reject) => {
+      const py = spawn('python3', [
+        pythonScriptPath,
+        inputPdfPath,
+        outputPdfPath,
+        editsPath,
+        additionsPath,
+      ]);
       let stderr = '';
-      py.stderr.on('data', (d) => (stderr += d.toString()));
+      py.stdout.on('data', (d) => process.stdout.write(`[py-edit] ${d}`));
+      py.stderr.on('data', (d) => {
+        const s = d.toString();
+        stderr += s;
+        process.stderr.write(`[py-edit] ${s}`);
+      });
       py.on('close', (code) => {
         if (code === 0) resolve();
-        else reject(new Error(`edit_pdf failed with code ${code}: ${stderr}`));
+        else reject(new Error(`edit_pdf failed (code ${code}): ${stderr}`));
       });
       py.on('error', (err) => reject(err));
     });
