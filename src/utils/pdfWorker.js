@@ -2171,54 +2171,47 @@ export async function performPdfOcr(file, options = {}) {
 }
 
 /**
- * Edit PDF text in place. Sends a batch of text-span edits to the backend,
- * which redacts the original glyphs and re-inserts new text preserving
- * position, font family, size, weight, italic and color.
+ * Edit PDF text in place + add new text/shape additions.
  *
  * @param {File} file - Original PDF
- * @param {Array} edits - Array of edit descriptors:
+ * @param {Array} edits - Existing-span edits (same shape as before)
+ * @param {Array} additions - New text/shape additions:
  *   {
- *     page: number,                    // 1-based
- *     bbox: [x0, y0, x1, y1],          // PDF points, top-left origin
- *     originalText: string,
- *     newText: string,
- *     fontName: string,                // e.g. "ABCDEF+Arial-BoldMT"
- *     fontSize: number,
- *     color: [r, g, b],                // 0..1 floats
- *     align: 'left'|'center'|'right'
+ *     page: 1,
+ *     type: 'text' | 'shape',
+ *     bbox: {x0, y0, x1, y1},   // PDF points, top-down
+ *     // text: text, fontName, fontSize, color, bold, italic, underline
+ *     // shape: shapeType, strokeColor, strokeWidth, fillColor
  *   }
- * @returns {Promise<{ blob: Blob, filename: string, originalSize: number, compressedSize: number }>}
  */
-export async function editPdfText(file, edits) {
+export async function editPdfText(file, edits, additions = []) {
   const isLocked = await checkPdfPassword(file);
   if (isLocked) {
     const err = new Error(`Cannot process: "${file.name}" is password-protected.`);
     err.lockedFiles = [file.name];
     throw err;
   }
-
-  if (!Array.isArray(edits) || edits.length === 0) {
-    throw new Error('No text edits provided.');
+  if ((!edits || edits.length === 0) && (!additions || additions.length === 0)) {
+    throw new Error('No edits or additions provided.');
   }
 
   const formData = new FormData();
   formData.append('file', file);
-  formData.append('edits', JSON.stringify(edits));
+  formData.append('edits', JSON.stringify(edits || []));
+  formData.append('additions', JSON.stringify(additions || []));
 
-  //const response = await fetch(`${API_BASE_URL}/api/edit-pdf`, {
-  const response = await fetch('/api/edit-pdf', {
+  const response = await fetch(`${API_BASE_URL}/api/edit-pdf`, {
     method: 'POST',
     body: formData,
   });
 
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}));
-    throw new Error(errorData.error || 'Server failed to edit PDF text.');
+    throw new Error(errorData.error || 'Server failed to edit PDF.');
   }
 
   const pdfBlob = await response.blob();
   const baseName = file.name.replace(/\.[^/.]+$/, '');
-
   return {
     blob: pdfBlob,
     filename: `${baseName}_edited.pdf`,

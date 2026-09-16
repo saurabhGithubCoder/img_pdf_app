@@ -865,7 +865,7 @@ app.post('/api/convert/pdf-to-markdown', upload.single('file'), async (req, res)
 });
 
 // ---------------------------------------------------------
-// Edit PDF Text (in-place span-level editing via PyMuPDF)
+// Edit PDF (in-place span edits + new text/shape additions)
 // ---------------------------------------------------------
 app.post('/api/edit-pdf', upload.single('file'), async (req, res) => {
   if (!req.file) {
@@ -877,6 +877,7 @@ app.post('/api/edit-pdf', upload.single('file'), async (req, res) => {
   const inputPdfPath = path.join(tempDir, 'input.pdf');
   const outputPdfPath = path.join(tempDir, 'output.pdf');
   const editsPath = path.join(tempDir, 'edits.json');
+  const additionsPath = path.join(tempDir, 'additions.json');
   const pythonScriptPath = path.join(__dirname, 'convert_edit_pdf.py');
 
   try {
@@ -884,20 +885,22 @@ app.post('/api/edit-pdf', upload.single('file'), async (req, res) => {
     await fs.writeFile(inputPdfPath, req.file.buffer);
 
     let edits = [];
-    try {
-      edits = JSON.parse(req.body.edits || '[]');
-    } catch {
-      return res.status(400).json({ error: 'Invalid edits payload.' });
-    }
+    let additions = [];
+    try { edits = JSON.parse(req.body.edits || '[]'); } catch { /* ignore */ }
+    try { additions = JSON.parse(req.body.additions || '[]'); } catch { /* ignore */ }
 
-    if (!Array.isArray(edits) || edits.length === 0) {
-      return res.status(400).json({ error: 'No text edits provided.' });
+    if (
+      (!Array.isArray(edits) || edits.length === 0) &&
+      (!Array.isArray(additions) || additions.length === 0)
+    ) {
+      return res.status(400).json({ error: 'No edits or additions provided.' });
     }
 
     await fs.writeFile(editsPath, JSON.stringify(edits), 'utf-8');
+    await fs.writeFile(additionsPath, JSON.stringify(additions), 'utf-8');
 
     await new Promise((resolve, reject) => {
-      const py = spawn('python3', [pythonScriptPath, inputPdfPath, outputPdfPath, editsPath]);
+      const py = spawn('python3', [pythonScriptPath, inputPdfPath, outputPdfPath, editsPath, additionsPath]);
       let stderr = '';
       py.stderr.on('data', (d) => (stderr += d.toString()));
       py.on('close', (code) => {
@@ -917,7 +920,7 @@ app.post('/api/edit-pdf', upload.single('file'), async (req, res) => {
     return res.send(pdfBuffer);
   } catch (error) {
     console.error('PDF text edit error:', error);
-    return res.status(500).json({ error: error.message || 'Failed to edit PDF text.' });
+    return res.status(500).json({ error: error.message || 'Failed to edit PDF.' });
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
   }
