@@ -2200,7 +2200,8 @@ export async function editPdfText(file, edits, additions = []) {
   formData.append('edits', JSON.stringify(edits || []));
   formData.append('additions', JSON.stringify(additions || []));
 
-  const response = await fetch(`${API_BASE_URL}/api/edit-pdf`, {
+  const response = await fetch('/api/edit-pdf', {
+  //const response = await fetch(`${API_BASE_URL}/api/edit-pdf`, {
     method: 'POST',
     body: formData,
   });

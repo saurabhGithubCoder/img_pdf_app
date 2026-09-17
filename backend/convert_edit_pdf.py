@@ -1,19 +1,27 @@
 """
 In-place PDF editing engine powered by PyMuPDF.
 
-New in this version:
-  • Google Font support — 40+ web fonts are downloaded on demand from the
-    Google Fonts CDN and embedded into the output PDF.
-  • System font aliases for Linux (Liberation / DejaVu / Carlito / Noto …).
-  • Bulletproof multi-tier insertion — text is always visible.
-  • Alignment via manual x-positioning (no insert_textbox dropouts).
+Supports:
+  • Existing-span edits (redact + re-insert with mixed-font preservation)
+  • New text additions
+  • Shapes (rect, ellipse, line, arrow, triangle, diamond)
+  • Highlights (semi-transparent colored rectangles)
+  • Images (base64 data URL embedded into PDF)
+  • Freehand annotations (polyline paths)
+
+Key protections:
+  • Original fonts extracted BEFORE redaction so subset is preserved.
+  • Per-character insert with explicit color + render_mode=2 to survive
+    post-redaction graphics state.
+  • Google Fonts verified as real TTF before use.
 """
 import sys
 import os
 import json
 import math
-import time
 import re
+import time
+import base64
 import urllib.request
 import urllib.parse
 import fitz  # PyMuPDF
@@ -24,51 +32,284 @@ def log(msg):
 
 
 # ===========================================================================
-# FONT SYSTEM
+# FONT CATEGORY → CLOSEST FREE CLONE
 # ===========================================================================
-
-# Names that map to the PDF Base-14 fonts
-BASE14_FAMILIES = {
-    'Helvetica', 'Arial',
-    'Times', 'Times New Roman',
-    'Courier', 'Courier New',
-    'Symbol', 'Zapf Dingbats',
+CATEGORY_FALLBACK = {
+    'grotesque-sans':     {'clone': 'Arimo',            'fallback': 'Arial, Helvetica, sans-serif'},
+    'neo-grotesque-sans': {'clone': 'Inter',            'fallback': 'Arial, Helvetica, sans-serif'},
+    'geometric-sans':     {'clone': 'Jost',             'fallback': 'Arial, Helvetica, sans-serif'},
+    'humanist-sans':      {'clone': 'Open Sans',        'fallback': 'Arial, Helvetica, sans-serif'},
+    'transitional-serif': {'clone': 'Tinos',            'fallback': '"Times New Roman", serif'},
+    'old-style-serif':    {'clone': 'EB Garamond',      'fallback': 'Georgia, serif'},
+    'modern-serif':       {'clone': 'Playfair Display', 'fallback': 'Georgia, serif'},
+    'slab-serif':         {'clone': 'Bitter',           'fallback': 'Georgia, serif'},
+    'monospace':          {'clone': 'JetBrains Mono',   'fallback': 'Consolas, monospace'},
+    'script':             {'clone': 'Pacifico',         'fallback': 'cursive'},
+    'display':            {'clone': 'Oswald',           'fallback': 'Impact, sans-serif'},
+    'symbol':             {'clone': None,               'fallback': 'Symbol, serif'},
 }
 
-# Google Font families we serve. Anything here can be downloaded on demand.
+FONT_PATTERNS = [
+    (r'^futurapt', 'Futura PT', 'geometric-sans'),
+    (r'^futura', 'Futura', 'geometric-sans'),
+    (r'^effra', 'Effra', 'geometric-sans'),
+    (r'^circular', 'Circular', 'geometric-sans'),
+    (r'^gotham', 'Gotham', 'geometric-sans'),
+    (r'^proximanova', 'Proxima Nova', 'geometric-sans'),
+    (r'^centurygothic', 'Century Gothic', 'geometric-sans'),
+    (r'^avenirnext', 'Avenir Next', 'geometric-sans'),
+    (r'^avenir', 'Avenir', 'geometric-sans'),
+    (r'^poppins', 'Poppins', 'geometric-sans'),
+    (r'^jost', 'Jost', 'geometric-sans'),
+    (r'^montserrat', 'Montserrat', 'geometric-sans'),
+    (r'^brandon', 'Brandon Grotesque', 'geometric-sans'),
+    (r'^museosans', 'Museo Sans', 'geometric-sans'),
+    (r'^questrial', 'Questrial', 'geometric-sans'),
+    (r'^dmsans', 'DM Sans', 'geometric-sans'),
+    (r'^sofiapro', 'Sofia Pro', 'geometric-sans'),
+    (r'^avantgarde', 'ITC Avant Garde', 'geometric-sans'),
+    (r'^inter($|variable)', 'Inter', 'neo-grotesque-sans'),
+    (r'^helveticanow', 'Helvetica Now', 'neo-grotesque-sans'),
+    (r'^aktivgrotesk', 'Aktiv Grotesk', 'neo-grotesque-sans'),
+    (r'^roboto($|sans|flex|condensed)', 'Roboto', 'neo-grotesque-sans'),
+    (r'^sfpro|^sanfrancisco|^sfcompact', 'San Francisco', 'neo-grotesque-sans'),
+    (r'^helveticaneue', 'Helvetica Neue', 'grotesque-sans'),
+    (r'^helvetica', 'Helvetica', 'grotesque-sans'),
+    (r'^arialrounded', 'Arial Rounded', 'geometric-sans'),
+    (r'^arialnarrow', 'Arial Narrow', 'grotesque-sans'),
+    (r'^arialblack', 'Arial Black', 'grotesque-sans'),
+    (r'^arial', 'Arial', 'grotesque-sans'),
+    (r'^liberationsans', 'Arial', 'grotesque-sans'),
+    (r'^arimo', 'Arimo', 'grotesque-sans'),
+    (r'^nimbussans', 'Nimbus Sans', 'grotesque-sans'),
+    (r'^univers', 'Univers', 'grotesque-sans'),
+    (r'^akzidenz', 'Akzidenz-Grotesk', 'grotesque-sans'),
+    (r'^franklingothic', 'Franklin Gothic', 'grotesque-sans'),
+    (r'^newsgothic', 'News Gothic', 'grotesque-sans'),
+    (r'^tradegothic', 'Trade Gothic', 'grotesque-sans'),
+    (r'^opensans', 'Open Sans', 'humanist-sans'),
+    (r'^lato', 'Lato', 'humanist-sans'),
+    (r'^segoeuivariable', 'Segoe UI', 'humanist-sans'),
+    (r'^segoeui', 'Segoe UI', 'humanist-sans'),
+    (r'^carlito', 'Calibri', 'humanist-sans'),
+    (r'^calibri', 'Calibri', 'humanist-sans'),
+    (r'^myriadpro', 'Myriad Pro', 'humanist-sans'),
+    (r'^myriad', 'Myriad', 'humanist-sans'),
+    (r'^frutiger', 'Frutiger', 'humanist-sans'),
+    (r'^sourcesans', 'Source Sans Pro', 'humanist-sans'),
+    (r'^notosans', 'Noto Sans', 'humanist-sans'),
+    (r'^ptsans', 'PT Sans', 'humanist-sans'),
+    (r'^nunitosans', 'Nunito Sans', 'humanist-sans'),
+    (r'^nunito', 'Nunito', 'humanist-sans'),
+    (r'^firasans', 'Fira Sans', 'humanist-sans'),
+    (r'^ubuntucondensed', 'Ubuntu Condensed', 'humanist-sans'),
+    (r'^ubuntu', 'Ubuntu', 'humanist-sans'),
+    (r'^worksans', 'Work Sans', 'humanist-sans'),
+    (r'^tahoma', 'Tahoma', 'humanist-sans'),
+    (r'^verdana', 'Verdana', 'humanist-sans'),
+    (r'^trebuchet', 'Trebuchet MS', 'humanist-sans'),
+    (r'^optima', 'Optima', 'humanist-sans'),
+    (r'^aptos', 'Aptos', 'humanist-sans'),
+    (r'^karla', 'Karla', 'humanist-sans'),
+    (r'^mulish', 'Mulish', 'humanist-sans'),
+    (r'^manrope', 'Manrope', 'humanist-sans'),
+    (r'^raleway', 'Raleway', 'humanist-sans'),
+    (r'^candara', 'Candara', 'humanist-sans'),
+    (r'^corbel', 'Corbel', 'humanist-sans'),
+    (r'^rubik', 'Rubik', 'humanist-sans'),
+    (r'^gillsans', 'Gill Sans', 'humanist-sans'),
+    (r'^goudysans', 'Goudy Sans', 'humanist-sans'),
+    (r'^timesnewroman|^times$', 'Times New Roman', 'transitional-serif'),
+    (r'^tinos', 'Tinos', 'transitional-serif'),
+    (r'^liberationserif', 'Times New Roman', 'transitional-serif'),
+    (r'^georgia', 'Georgia', 'transitional-serif'),
+    (r'^gelasio', 'Gelasio', 'transitional-serif'),
+    (r'^librebaskerville|^baskervville', 'Libre Baskerville', 'transitional-serif'),
+    (r'^baskerville', 'Baskerville', 'transitional-serif'),
+    (r'^merriweather', 'Merriweather', 'transitional-serif'),
+    (r'^ptserif', 'PT Serif', 'transitional-serif'),
+    (r'^sourceserif', 'Source Serif Pro', 'transitional-serif'),
+    (r'^charter', 'Charter', 'transitional-serif'),
+    (r'^sitka', 'Sitka', 'transitional-serif'),
+    (r'^notoserif', 'Noto Serif', 'transitional-serif'),
+    (r'^constantia', 'Constantia', 'transitional-serif'),
+    (r'^crimson', 'Crimson Text', 'transitional-serif'),
+    (r'^caladea', 'Cambria', 'transitional-serif'),
+    (r'^cambria', 'Cambria', 'transitional-serif'),
+    (r'^adobegaramond', 'Adobe Garamond', 'old-style-serif'),
+    (r'^ebgaramond', 'EB Garamond', 'old-style-serif'),
+    (r'^garamond', 'Garamond', 'old-style-serif'),
+    (r'^cormorant', 'Cormorant Garamond', 'old-style-serif'),
+    (r'^librecaslon', 'Libre Caslon', 'old-style-serif'),
+    (r'^caslon', 'Caslon', 'old-style-serif'),
+    (r'^minionpro', 'Minion Pro', 'old-style-serif'),
+    (r'^minion', 'Minion', 'old-style-serif'),
+    (r'^palatino|^bookantiqua|^urwpalladio', 'Palatino', 'old-style-serif'),
+    (r'^sabon', 'Sabon', 'old-style-serif'),
+    (r'^jenson', 'Jenson', 'old-style-serif'),
+    (r'^goudy', 'Goudy Old Style', 'old-style-serif'),
+    (r'^librebodoni', 'Libre Bodoni', 'modern-serif'),
+    (r'^didot', 'Didot', 'modern-serif'),
+    (r'^bodoni', 'Bodoni', 'modern-serif'),
+    (r'^playfairdisplay', 'Playfair Display', 'modern-serif'),
+    (r'^playfair', 'Playfair', 'modern-serif'),
+    (r'^walbaum', 'Walbaum', 'modern-serif'),
+    (r'^abrilfatface', 'Abril Fatface', 'modern-serif'),
+    (r'^rockwell', 'Rockwell', 'slab-serif'),
+    (r'^bitter', 'Bitter', 'slab-serif'),
+    (r'^robotoslab', 'Roboto Slab', 'slab-serif'),
+    (r'^arvo', 'Arvo', 'slab-serif'),
+    (r'^josefinslab', 'Josefin Slab', 'slab-serif'),
+    (r'^americantypewriter', 'American Typewriter', 'slab-serif'),
+    (r'^courierprime', 'Courier Prime', 'monospace'),
+    (r'^couriernew|^courier$', 'Courier New', 'monospace'),
+    (r'^cousine', 'Cousine', 'monospace'),
+    (r'^liberationmono', 'Courier New', 'monospace'),
+    (r'^consolas', 'Consolas', 'monospace'),
+    (r'^menlo', 'Menlo', 'monospace'),
+    (r'^monaco', 'Monaco', 'monospace'),
+    (r'^andalemono', 'Andale Mono', 'monospace'),
+    (r'^inconsolata', 'Inconsolata', 'monospace'),
+    (r'^jetbrainsmono', 'JetBrains Mono', 'monospace'),
+    (r'^firacode', 'Fira Code', 'monospace'),
+    (r'^firamono', 'Fira Mono', 'monospace'),
+    (r'^sourcecodepro', 'Source Code Pro', 'monospace'),
+    (r'^ibmplexmono', 'IBM Plex Mono', 'monospace'),
+    (r'^robotomono', 'Roboto Mono', 'monospace'),
+    (r'^cascadia', 'Cascadia Code', 'monospace'),
+    (r'^dejavusansmono|^dejavumono', 'DejaVu Sans Mono', 'monospace'),
+    (r'^sfmono', 'SF Mono', 'monospace'),
+    (r'^ubuntumono', 'Ubuntu Mono', 'monospace'),
+    (r'^spacemono', 'Space Mono', 'monospace'),
+    (r'^ptmono', 'PT Mono', 'monospace'),
+    (r'^notomono', 'Noto Mono', 'monospace'),
+    (r'^freemono', 'FreeMono', 'monospace'),
+    (r'^pacifico', 'Pacifico', 'script'),
+    (r'^lobster', 'Lobster', 'script'),
+    (r'^dancingscript', 'Dancing Script', 'script'),
+    (r'^greatvibes', 'Great Vibes', 'script'),
+    (r'^caveat', 'Caveat', 'script'),
+    (r'^satisfy', 'Satisfy', 'script'),
+    (r'^brushscript', 'Brush Script', 'script'),
+    (r'^scriptmt', 'Script MT', 'script'),
+    (r'^snellroundhand', 'Snell Roundhand', 'script'),
+    (r'^allura', 'Allura', 'script'),
+    (r'^alexbrush', 'Alex Brush', 'script'),
+    (r'^kaushanscript', 'Kaushan Script', 'script'),
+    (r'^indieflower', 'Indie Flower', 'script'),
+    (r'^shadowsintolight', 'Shadows Into Light', 'script'),
+    (r'^oswald', 'Oswald', 'display'),
+    (r'^bebasneue|^bebas', 'Bebas Neue', 'display'),
+    (r'^impact', 'Impact', 'display'),
+    (r'^anton', 'Anton', 'display'),
+    (r'^archivoblack|^archivo', 'Archivo Black', 'display'),
+    (r'^chivo', 'Chivo', 'display'),
+    (r'^barlowcondensed', 'Barlow Condensed', 'display'),
+    (r'^barlowsemicondensed', 'Barlow Semi Condensed', 'display'),
+    (r'^barlow', 'Barlow', 'display'),
+    (r'^copperplate', 'Copperplate', 'display'),
+    (r'^trajan', 'Trajan Pro', 'display'),
+    (r'^cinzel', 'Cinzel', 'display'),
+    (r'^marcellus', 'Marcellus', 'display'),
+    (r'^symbol$', 'Symbol', 'symbol'),
+    (r'^wingdings', 'Wingdings', 'symbol'),
+    (r'^webdings', 'Webdings', 'symbol'),
+    (r'^zapfdingbats|^dingbats', 'Zapf Dingbats', 'symbol'),
+    (r'^segoeuisymbol|^segoeuiemoji', 'Segoe UI Symbol', 'symbol'),
+    (r'^mangal|^nirmalaui|^aparajita|^kokila|^utsaah', 'Noto Sans Devanagari', 'humanist-sans'),
+]
+
+COMPILED = [(re.compile(p, re.IGNORECASE), name, cat) for p, name, cat in FONT_PATTERNS]
+
+
+def strip_style_suffixes(name):
+    s = name or ''
+    for suf in (
+        '-BoldItalic', '-BoldOblique', '-Bold', '-Italic', '-Oblique',
+        ' Bold Italic', ' Bold', ' Italic', ' Oblique',
+        'BoldItalic', 'Bold', 'Italic', 'Oblique',
+        '-Regular', ' Regular', '-Roman', ' Roman',
+    ):
+        if s.endswith(suf):
+            s = s[: -len(suf)]
+            break
+    s = re.sub(r'(MT|PS|MS|Std|Pro)$', '', s, flags=re.IGNORECASE).strip()
+    return s
+
+
+def detect_font_info(raw_name):
+    cleaned = re.sub(r'^[A-Z]{6}\+', '', raw_name or '')
+    family = strip_style_suffixes(cleaned) or 'Helvetica'
+    normalized = re.sub(r'[\s\-_]', '', family.lower())
+    for re_obj, canonical, category in COMPILED:
+        if re_obj.match(normalized):
+            return canonical, category
+    lower = normalized
+    guessed = 'humanist-sans'
+    if 'serif' in lower and 'sans' not in lower:
+        if any(k in lower for k in ('modern', 'didone', 'bodoni', 'didot')):
+            guessed = 'modern-serif'
+        elif any(k in lower for k in ('slab', 'rockwell')):
+            guessed = 'slab-serif'
+        elif any(k in lower for k in ('garamond', 'caslon', 'jenson', 'goudy', 'minion', 'old')):
+            guessed = 'old-style-serif'
+        else:
+            guessed = 'transitional-serif'
+    elif 'mono' in lower or 'code' in lower:
+        guessed = 'monospace'
+    elif any(k in lower for k in ('script', 'hand', 'cursive', 'brush', 'callig')):
+        guessed = 'script'
+    elif any(k in lower for k in ('display', 'black', 'condensed', 'heavy')):
+        guessed = 'display'
+    elif any(k in lower for k in ('geo', 'futura', 'circle', 'round', 'aero')):
+        guessed = 'geometric-sans'
+    elif any(k in lower for k in ('grotesk', 'grotesque', 'swiss', 'helv')):
+        guessed = 'grotesque-sans'
+    return family, guessed
+
+
+# ===========================================================================
+# GOOGLE FONT + SYSTEM FONT
+# ===========================================================================
 GOOGLE_FONT_FAMILIES = {
-    'Roboto', 'Open Sans', 'Lato', 'Montserrat', 'Poppins', 'Inter',
-    'Nunito', 'Raleway', 'Work Sans', 'Ubuntu', 'Rubik', 'Karla',
-    'Mulish', 'Manrope', 'DM Sans',
-    'Merriweather', 'Playfair Display', 'Lora', 'PT Serif',
-    'Crimson Text', 'Libre Baskerville', 'EB Garamond',
-    'Cormorant Garamond', 'Noto Serif', 'Bitter',
-    'JetBrains Mono', 'Fira Code', 'Source Code Pro',
-    'IBM Plex Mono', 'Roboto Mono',
-    'Oswald', 'Bebas Neue', 'Lobster', 'Pacifico',
-    'Dancing Script', 'Great Vibes', 'Caveat', 'Satisfy',
+    'Arimo', 'Tinos', 'Cousine', 'Gelasio', 'Jost',
+    'Inter', 'Open Sans', 'EB Garamond', 'Playfair Display',
+    'Bitter', 'JetBrains Mono', 'Pacifico', 'Oswald',
+    'Roboto', 'Lato', 'Montserrat', 'Poppins', 'Nunito', 'Raleway',
+    'Work Sans', 'Ubuntu', 'Rubik', 'Karla', 'Mulish', 'Manrope',
+    'DM Sans', 'Merriweather', 'Lora', 'PT Serif', 'Crimson Text',
+    'Libre Baskerville', 'Cormorant Garamond', 'Noto Serif',
+    'Fira Code', 'Source Code Pro', 'IBM Plex Mono', 'Roboto Mono',
+    'Bebas Neue', 'Lobster', 'Dancing Script', 'Great Vibes', 'Caveat', 'Satisfy',
 }
 
-# Cache directories
 _FONT_CACHE_DIR = os.path.join('/tmp', 'pdf-forge-google-fonts')
 os.makedirs(_FONT_CACHE_DIR, exist_ok=True)
+_google_font_disk = {}
 
-_google_font_disk = {}   # (family, weight, italic) -> local_path or None
+TTF_MAGIC = (b'\x00\x01\x00\x00', b'OTTO', b'true', b'typ1')
 
 
 def _download_google_font(family, weight=400, italic=False):
-    """Fetch a Google Font TTF and cache it on disk. Returns path or None."""
     key = (family, weight, italic)
     if key in _google_font_disk:
         return _google_font_disk[key]
-
     safe = family.replace(' ', '_').replace('/', '_')
     filename = f"{safe}-{weight}{'-italic' if italic else ''}.ttf"
     local_path = os.path.join(_FONT_CACHE_DIR, filename)
 
     if os.path.exists(local_path) and os.path.getsize(local_path) > 5000:
-        _google_font_disk[key] = local_path
-        return local_path
+        try:
+            with open(local_path, 'rb') as fh:
+                magic = fh.read(4)
+            if magic in TTF_MAGIC:
+                _google_font_disk[key] = local_path
+                return local_path
+            else:
+                log(f"Cached '{family}' wrong magic {magic.hex()} — re-downloading")
+                os.remove(local_path)
+        except Exception:
+            pass
 
     try:
         ital = '1' if italic else '0'
@@ -77,12 +318,13 @@ def _download_google_font(family, weight=400, italic=False):
             f"https://fonts.googleapis.com/css2"
             f"?family={family_q}:ital,wght@{ital},{weight}&display=swap"
         )
-        # Use an old UA so Google returns TTF, not WOFF2
         req = urllib.request.Request(css_url, headers={'User-Agent': 'Mozilla/4.0'})
         with urllib.request.urlopen(req, timeout=15) as resp:
             css = resp.read().decode('utf-8', errors='ignore')
 
         m = re.search(r'src:\s*url\((https://[^)]+\.ttf)\)', css)
+        if not m:
+            m = re.search(r'src:\s*url\((https://[^)]+\.otf)\)', css)
         if not m:
             m = re.search(r'src:\s*url\((https://[^)]+)\)', css)
         if not m:
@@ -96,97 +338,76 @@ def _download_google_font(family, weight=400, italic=False):
             data = resp2.read()
 
         if len(data) < 1000:
+            log(f"Downloaded '{family}' too small ({len(data)} bytes)")
+            _google_font_disk[key] = None
+            return None
+
+        magic = data[:4]
+        if magic not in TTF_MAGIC:
+            log(f"Downloaded '{family}' not TTF (magic={magic.hex()})")
             _google_font_disk[key] = None
             return None
 
         with open(local_path, 'wb') as f:
             f.write(data)
-
-        log(f"Downloaded Google Font '{family}' ({weight}{' italic' if italic else ''}) "
-            f"→ {local_path} ({len(data)} bytes)")
+        log(f"Downloaded '{family}' ({weight}{' italic' if italic else ''}) → {local_path} ({len(data)} bytes)")
         _google_font_disk[key] = local_path
         return local_path
     except Exception as e:
-        log(f"Google Font download failed for {family} {weight} italic={italic}: {e}")
+        log(f"Download failed for {family} {weight}: {e}")
         _google_font_disk[key] = None
         return None
 
 
-# Map user-facing font family names to system file paths (Linux).
-# These are the fonts installed by the apt packages listed in the README.
 SYSTEM_FONT_FILES = {
-    'Arial': {
-        'regular': '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
-        'bold': '/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf',
-        'italic': '/usr/share/fonts/truetype/liberation/LiberationSans-Italic.ttf',
-        'bolditalic': '/usr/share/fonts/truetype/liberation/LiberationSans-BoldItalic.ttf',
-    },
-    'Helvetica': {
-        'regular': '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
-        'bold': '/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf',
-        'italic': '/usr/share/fonts/truetype/liberation/LiberationSans-Italic.ttf',
-        'bolditalic': '/usr/share/fonts/truetype/liberation/LiberationSans-BoldItalic.ttf',
-    },
-    'Times New Roman': {
-        'regular': '/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf',
-        'bold': '/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf',
-        'italic': '/usr/share/fonts/truetype/liberation/LiberationSerif-Italic.ttf',
-        'bolditalic': '/usr/share/fonts/truetype/liberation/LiberationSerif-BoldItalic.ttf',
-    },
-    'Times': {
-        'regular': '/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf',
-        'bold': '/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf',
-        'italic': '/usr/share/fonts/truetype/liberation/LiberationSerif-Italic.ttf',
-        'bolditalic': '/usr/share/fonts/truetype/liberation/LiberationSerif-BoldItalic.ttf',
-    },
-    'Courier New': {
-        'regular': '/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf',
-        'bold': '/usr/share/fonts/truetype/liberation/LiberationMono-Bold.ttf',
-        'italic': '/usr/share/fonts/truetype/liberation/LiberationMono-Italic.ttf',
-        'bolditalic': '/usr/share/fonts/truetype/liberation/LiberationMono-BoldItalic.ttf',
-    },
-    'Courier': {
-        'regular': '/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf',
-        'bold': '/usr/share/fonts/truetype/liberation/LiberationMono-Bold.ttf',
-        'italic': '/usr/share/fonts/truetype/liberation/LiberationMono-Italic.ttf',
-        'bolditalic': '/usr/share/fonts/truetype/liberation/LiberationMono-BoldItalic.ttf',
-    },
-    'Georgia': {
-        'regular': '/usr/share/fonts/truetype/crosextra/Caladea-Regular.ttf',
-        'bold': '/usr/share/fonts/truetype/crosextra/Caladea-Bold.ttf',
-        'italic': '/usr/share/fonts/truetype/crosextra/Caladea-Italic.ttf',
-        'bolditalic': '/usr/share/fonts/truetype/crosextra/Caladea-BoldItalic.ttf',
-    },
-    'Cambria': {
-        'regular': '/usr/share/fonts/truetype/crosextra/Caladea-Regular.ttf',
-        'bold': '/usr/share/fonts/truetype/crosextra/Caladea-Bold.ttf',
-        'italic': '/usr/share/fonts/truetype/crosextra/Caladea-Italic.ttf',
-        'bolditalic': '/usr/share/fonts/truetype/crosextra/Caladea-BoldItalic.ttf',
-    },
-    'Verdana': {
-        'regular': '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
-        'bold': '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
-        'italic': '/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf',
-        'bolditalic': '/usr/share/fonts/truetype/dejavu/DejaVuSans-BoldOblique.ttf',
-    },
-    'Tahoma': {
-        'regular': '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
-        'bold': '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
-        'italic': '/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf',
-        'bolditalic': '/usr/share/fonts/truetype/dejavu/DejaVuSans-BoldOblique.ttf',
-    },
-    'Trebuchet MS': {
-        'regular': '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
-        'bold': '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
-        'italic': '/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf',
-        'bolditalic': '/usr/share/fonts/truetype/dejavu/DejaVuSans-BoldOblique.ttf',
-    },
-    'Calibri': {
-        'regular': '/usr/share/fonts/truetype/crosextra/Carlito-Regular.ttf',
-        'bold': '/usr/share/fonts/truetype/crosextra/Carlito-Bold.ttf',
-        'italic': '/usr/share/fonts/truetype/crosextra/Carlito-Italic.ttf',
-        'bolditalic': '/usr/share/fonts/truetype/crosextra/Carlito-BoldItalic.ttf',
-    },
+    'Arial':           {'regular': '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
+                        'bold': '/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf',
+                        'italic': '/usr/share/fonts/truetype/liberation/LiberationSans-Italic.ttf',
+                        'bolditalic': '/usr/share/fonts/truetype/liberation/LiberationSans-BoldItalic.ttf'},
+    'Helvetica':       {'regular': '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
+                        'bold': '/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf',
+                        'italic': '/usr/share/fonts/truetype/liberation/LiberationSans-Italic.ttf',
+                        'bolditalic': '/usr/share/fonts/truetype/liberation/LiberationSans-BoldItalic.ttf'},
+    'Times New Roman': {'regular': '/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf',
+                        'bold': '/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf',
+                        'italic': '/usr/share/fonts/truetype/liberation/LiberationSerif-Italic.ttf',
+                        'bolditalic': '/usr/share/fonts/truetype/liberation/LiberationSerif-BoldItalic.ttf'},
+    'Times':           {'regular': '/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf',
+                        'bold': '/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf',
+                        'italic': '/usr/share/fonts/truetype/liberation/LiberationSerif-Italic.ttf',
+                        'bolditalic': '/usr/share/fonts/truetype/liberation/LiberationSerif-BoldItalic.ttf'},
+    'Courier New':     {'regular': '/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf',
+                        'bold': '/usr/share/fonts/truetype/liberation/LiberationMono-Bold.ttf',
+                        'italic': '/usr/share/fonts/truetype/liberation/LiberationMono-Italic.ttf',
+                        'bolditalic': '/usr/share/fonts/truetype/liberation/LiberationMono-BoldItalic.ttf'},
+    'Courier':         {'regular': '/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf',
+                        'bold': '/usr/share/fonts/truetype/liberation/LiberationMono-Bold.ttf',
+                        'italic': '/usr/share/fonts/truetype/liberation/LiberationMono-Italic.ttf',
+                        'bolditalic': '/usr/share/fonts/truetype/liberation/LiberationMono-BoldItalic.ttf'},
+    'Georgia':         {'regular': '/usr/share/fonts/truetype/crosextra/Caladea-Regular.ttf',
+                        'bold': '/usr/share/fonts/truetype/crosextra/Caladea-Bold.ttf',
+                        'italic': '/usr/share/fonts/truetype/crosextra/Caladea-Italic.ttf',
+                        'bolditalic': '/usr/share/fonts/truetype/crosextra/Caladea-BoldItalic.ttf'},
+    'Cambria':         {'regular': '/usr/share/fonts/truetype/crosextra/Caladea-Regular.ttf',
+                        'bold': '/usr/share/fonts/truetype/crosextra/Caladea-Bold.ttf',
+                        'italic': '/usr/share/fonts/truetype/crosextra/Caladea-Italic.ttf',
+                        'bolditalic': '/usr/share/fonts/truetype/crosextra/Caladea-BoldItalic.ttf'},
+    'Verdana':         {'regular': '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+                        'bold': '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+                        'italic': '/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf',
+                        'bolditalic': '/usr/share/fonts/truetype/dejavu/DejaVuSans-BoldOblique.ttf'},
+    'Tahoma':          {'regular': '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+                        'bold': '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+                        'italic': '/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf',
+                        'bolditalic': '/usr/share/fonts/truetype/dejavu/DejaVuSans-BoldOblique.ttf'},
+    'Trebuchet MS':    {'regular': '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+                        'bold': '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+                        'italic': '/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf',
+                        'bolditalic': '/usr/share/fonts/truetype/dejavu/DejaVuSans-BoldOblique.ttf'},
+    'Calibri':         {'regular': '/usr/share/fonts/truetype/crosextra/Carlito-Regular.ttf',
+                        'bold': '/usr/share/fonts/truetype/crosextra/Carlito-Bold.ttf',
+                        'italic': '/usr/share/fonts/truetype/crosextra/Carlito-Italic.ttf',
+                        'bolditalic': '/usr/share/fonts/truetype/crosextra/Carlito-BoldItalic.ttf'},
 }
 
 
@@ -194,12 +415,7 @@ def _pick_system_file(family, bold, italic):
     entry = SYSTEM_FONT_FILES.get(family)
     if not entry:
         return None
-    key = (
-        'bolditalic' if (bold and italic)
-        else 'bold' if bold
-        else 'italic' if italic
-        else 'regular'
-    )
+    key = ('bolditalic' if (bold and italic) else 'bold' if bold else 'italic' if italic else 'regular')
     for k in (key, 'regular'):
         p = entry.get(k)
         if p and os.path.exists(p):
@@ -207,113 +423,198 @@ def _pick_system_file(family, bold, italic):
     return None
 
 
-# ---- Embedded-font tracking (per document) ----
-_embedded_fonts = {}   # (doc_id, cache_key) -> internal_name
+# ===========================================================================
+# PRE-EXTRACT FONTS (BEFORE REDACTION!)
+# ===========================================================================
+_page_font_cache = {}
 
 
-def _register_font_file(page, doc, font_path, cache_key):
-    """Register a font file on the page. Returns internal fontname or None."""
-    key = (id(doc), cache_key)
-    if key in _embedded_fonts:
-        return _embedded_fonts[key]
-
-    internal = f"PF{abs(hash(key)) % 1000000}"
+def _page_num_of(page):
     try:
-        page.insert_font(fontname=internal, fontfile=font_path)
-        _embedded_fonts[key] = internal
-        return internal
+        return page.number
+    except Exception:
+        return 0
+
+
+def pre_extract_page_fonts(page, doc, page_num):
+    doc_key = id(doc)
+    if doc_key not in _page_font_cache:
+        _page_font_cache[doc_key] = {}
+    if page_num in _page_font_cache[doc_key]:
+        return _page_font_cache[doc_key][page_num]
+
+    cache = {}
+    try:
+        fonts = page.get_fonts(full=True)
     except Exception as e:
-        log(f"insert_font failed for {cache_key}: {e}")
-        _embedded_fonts[key] = None
+        log(f"get_fonts failed on page {page_num}: {e}")
+        _page_font_cache[doc_key][page_num] = cache
+        return cache
+
+    log(f"  Pre-extracting {len(fonts)} fonts on page {page_num}")
+    for f in fonts:
+        try:
+            xref = f[0]
+            basefont = (f[3] or '')
+
+            buffer = None
+            try:
+                result = doc.extract_font(xref)
+                if len(result) >= 4:
+                    buffer = result[3]
+            except Exception as e:
+                log(f"    extract_font({xref}) failed: {e}")
+
+            if not buffer:
+                log(f"    xref {xref} '{basefont}': empty buffer")
+                continue
+
+            clean = basefont.lower()
+            if '+' in clean:
+                clean = clean.split('+', 1)[1]
+            clean = clean.strip()
+
+            font_obj = None
+            try:
+                font_obj = fitz.Font(fontbuffer=buffer)
+                test_len = font_obj.text_length('A', fontsize=12)
+                if test_len <= 0:
+                    log(f"    xref {xref} '{basefont}': broken metrics — buffer kept only")
+                    font_obj = None
+            except Exception as e:
+                log(f"    xref {xref} '{basefont}': Font() failed: {e}")
+
+            cache[clean] = {'buffer': buffer, 'xref': xref, 'font_obj': font_obj}
+            log(f"    cached '{clean}' (xref {xref}, {len(buffer)} bytes, obj={'yes' if font_obj else 'no'})")
+        except Exception as e:
+            log(f"    font cache error: {e}")
+
+    _page_font_cache[doc_key][page_num] = cache
+    return cache
+
+
+def find_original_font_in_cache(cache, original_name):
+    if not original_name or not cache:
         return None
+    target = original_name.lower()
+    if '+' in target:
+        target = target.split('+', 1)[1]
+    target = target.strip()
 
+    if target in cache:
+        return cache[target]
 
-def _resolve_full_font(family, bold, italic, page, doc):
-    """Resolve a family + bold/italic to an embedded font on this page.
+    for key, val in cache.items():
+        if target == key or target in key or key in target:
+            return val
 
-    Order of attempts:
-      1. System font file (Liberation / DejaVu / Carlito / Caladea)
-      2. Google Fonts download (with disk cache)
-    """
-    # 1) System
-    sys_path = _pick_system_file(family, bold, italic)
-    if sys_path:
-        name = _register_font_file(page, doc, sys_path, f"sys:{sys_path}")
-        if name:
-            return name
-
-    # 2) Google Fonts
-    if family in GOOGLE_FONT_FAMILIES:
-        weight = 700 if bold else 400
-        path = _download_google_font(family, weight, italic)
-        if not path and bold:
-            # Bold variant missing → try regular and let the PDF synthesise
-            path = _download_google_font(family, 400, italic)
-        if path:
-            name = _register_font_file(page, doc, path, f"gf:{family}:{weight}:{italic}")
-            if name:
-                return name
+    target_base = strip_style_suffixes(target).lower()
+    for key, val in cache.items():
+        key_base = strip_style_suffixes(key).lower()
+        if target_base == key_base or target_base in key_base or key_base in target_base:
+            return val
 
     return None
 
 
-def _resolve_base14(font_name):
-    """Map a font name to one of the PDF Base-14 codes."""
-    name = (font_name or '').lower()
-    if '+' in name:
-        name = name.split('+', 1)[1]
-
-    is_bold = any(k in name for k in ('bold', 'black', 'heavy', 'semibold', 'demibold'))
-    is_italic = any(k in name for k in ('italic', 'oblique'))
-
-    if any(k in name for k in ('times', 'georgia', 'garamond', 'cambria', 'minion')):
-        if is_bold and is_italic: return 'tibi'
-        if is_bold: return 'tibo'
-        if is_italic: return 'tiit'
-        return 'tiro'
-    if any(k in name for k in ('courier', 'mono', 'consol', 'menlo')):
-        if is_bold and is_italic: return 'cobi'
-        if is_bold: return 'cobo'
-        if is_italic: return 'coit'
-        return 'cour'
-    if 'symbol' in name: return 'symb'
-    if 'zapf' in name or 'dingbat' in name: return 'zadb'
-    if is_bold and is_italic: return 'hebi'
-    if is_bold: return 'hebo'
-    if is_italic: return 'heit'
-    return 'helv'
+# ===========================================================================
+# CLONE CACHE
+# ===========================================================================
+_clone_cache = {}
 
 
-def _parse_family_and_style(full_name):
-    """Parse 'Poppins-BoldItalic' → ('Poppins', True, True)."""
-    if not full_name:
-        return (None, False, False)
+def _get_clone_font(page, doc, original_name, bold, italic):
+    family, category = detect_font_info(original_name or 'Helvetica')
+    entry = CATEGORY_FALLBACK.get(category, CATEGORY_FALLBACK['humanist-sans'])
+    clone_family = entry.get('clone')
+    if not clone_family:
+        return None, None, None, None
 
-    # Strip subset prefix
-    if '+' in full_name:
-        full_name = full_name.split('+', 1)[1]
+    cache_key = (clone_family, bold, italic)
+    if cache_key in _clone_cache:
+        return _clone_cache[cache_key]
 
-    bold = False
-    italic = False
-    low = full_name.lower()
-    if 'bold' in low:
-        bold = True
-    if 'italic' in low or 'oblique' in low:
-        italic = True
+    sys_path = _pick_system_file(clone_family, bold, italic)
+    if sys_path:
+        try:
+            with open(sys_path, 'rb') as fh:
+                buf = fh.read()
+            obj = fitz.Font(fontbuffer=buf)
+            result = (obj, buf, sys_path, clone_family)
+            _clone_cache[cache_key] = result
+            return result
+        except Exception as e:
+            log(f"Clone sys-file failed: {e}")
 
-    # Strip style suffixes to get the family
-    family = full_name
-    for suf in ('-BoldItalic', '-BoldOblique', '-Bold', '-Italic', '-Oblique',
-                ' Bold Italic', ' Bold', ' Italic', ' Oblique'):
-        if family.endswith(suf):
-            family = family[: -len(suf)]
-            break
-    # Remove MT / PS / other vendor suffixes
-    for suf in ('MT', 'PS', 'MS'):
-        if family.endswith(suf):
-            family = family[:-len(suf)]
+    if clone_family in GOOGLE_FONT_FAMILIES:
+        weight = 700 if bold else 400
+        path = _download_google_font(clone_family, weight, italic)
+        if not path and bold:
+            path = _download_google_font(clone_family, 400, italic)
+        if path:
+            try:
+                with open(path, 'rb') as fh:
+                    buf = fh.read()
+                obj = fitz.Font(fontbuffer=buf)
+                result = (obj, buf, path, clone_family)
+                _clone_cache[cache_key] = result
+                return result
+            except Exception as e:
+                log(f"Clone Google-font failed: {e}")
 
-    return (family.strip(), bold, italic)
+    _clone_cache[cache_key] = (None, None, None, None)
+    return None, None, None, None
+
+
+def _has_glyph(font_obj, ch):
+    try:
+        return bool(font_obj.has_glyph(ch))
+    except Exception:
+        return True
+
+
+# ===========================================================================
+# FONT REGISTRATION — page-scoped keys
+# ===========================================================================
+_embedded_fonts = {}
+
+
+def _register_font_buffer(page, doc, buffer, cache_key):
+    page_num = _page_num_of(page)
+    key = (id(doc), page_num, cache_key)
+    if key in _embedded_fonts:
+        cached = _embedded_fonts[key]
+        if cached is not None:
+            return cached
+    internal = f"PF{abs(hash(key)) % 1000000}"
+    try:
+        page.insert_font(fontname=internal, fontbuffer=buffer)
+        _embedded_fonts[key] = internal
+        log(f"    Registered fontbuffer '{internal}' on page {page_num} ({len(buffer)} bytes)")
+        return internal
+    except Exception as e:
+        log(f"    insert_font(buffer) failed for {cache_key}: {e}")
+        _embedded_fonts[key] = None
+        return None
+
+
+def _register_font_file(page, doc, font_path, cache_key):
+    page_num = _page_num_of(page)
+    key = (id(doc), page_num, cache_key)
+    if key in _embedded_fonts:
+        cached = _embedded_fonts[key]
+        if cached is not None:
+            return cached
+    internal = f"PF{abs(hash(key)) % 1000000}"
+    try:
+        page.insert_font(fontname=internal, fontfile=font_path)
+        _embedded_fonts[key] = internal
+        log(f"    Registered fontfile '{internal}' on page {page_num}")
+        return internal
+    except Exception as e:
+        log(f"    insert_font(file) failed for {cache_key}: {e}")
+        _embedded_fonts[key] = None
+        return None
 
 
 def to_color_tuple(color):
@@ -333,16 +634,19 @@ def to_color_tuple(color):
 
 
 # ===========================================================================
-# TEXT INSERTION
+# TEXT INSERTION — segment-based with render_mode=2
 # ===========================================================================
 def _insert_text_span(page, doc, x0, y0, x1, y1, text, font_name, font_size, color,
                        original_font_name=None,
                        preserve_original_font=True,
+                       family_explicit=False,
+                       font_cache=None,
                        align='left', underline=False, strike=False,
                        superscript=False, subscript=False,
                        char_spacing=0.0, h_scale=1.0,
                        outline_color=None, outline_width=0.0):
     original_size = float(font_size)
+    text = str(text)
 
     if superscript:
         eff_size = original_size * 0.65
@@ -356,73 +660,123 @@ def _insert_text_span(page, doc, x0, y0, x1, y1, text, font_name, font_size, col
 
     baseline_y = (y1 - 0.15 * original_size) + baseline_shift
     color = to_color_tuple(color)
-    use_outline = (outline_color is not None and outline_width > 0)
+    color = (float(color[0]), float(color[1]), float(color[2]))
     use_char_spacing = abs(char_spacing) > 0.01
-    use_h_scale = abs(h_scale - 1.0) > 0.01
 
-    # ------------------------------------------------------------------
-    # Choose font code
-    # ------------------------------------------------------------------
-    font_code = None
-    used_extracted = False
+    bold_flag = bool(font_name and 'bold' in font_name.lower())
+    italic_flag = bool(font_name and 'italic' in font_name.lower())
 
-    family, bold, italic = _parse_family_and_style(font_name or '')
-    if not family:
-        family, bold, italic = _parse_family_and_style(original_font_name or '')
+    log(f"  [_insert_text_span] text='{text[:30]}' "
+        f"color=({color[0]:.3f},{color[1]:.3f},{color[2]:.3f}) "
+        f"size={eff_size:.2f} preserve={preserve_original_font} explicit={family_explicit}")
 
-    # 1) Preserve the ORIGINAL embedded font when user hasn't changed anything
-    if preserve_original_font and not superscript and not subscript:
-        try:
-            if original_font_name:
-                fonts = page.get_fonts(full=True)
-                target = original_font_name.lower()
-                if '+' in target:
-                    target = target.split('+', 1)[1]
-                for f in fonts:
-                    try:
-                        xref = f[0]
-                        basefont = (f[3] or '').lower()
-                        clean = basefont.split('+', 1)[1] if '+' in basefont else basefont
-                        if target == clean or target in clean or clean in target:
-                            _, _, _, buffer = doc.extract_font(xref)
-                            if buffer:
-                                reg = f"ext{xref}{int(time.time() * 1000) % 100000}"
-                                page.insert_font(fontname=reg, fontbuffer=buffer)
-                                font_code = reg
-                                used_extracted = True
-                                break
-                    except Exception:
-                        continue
-        except Exception as e:
-            log(f"extract original font failed: {e}")
+    orig_entry = None
+    if preserve_original_font and not superscript and not subscript and font_cache:
+        orig_entry = find_original_font_in_cache(font_cache, original_font_name)
 
-    # 2) Full font — system file OR Google Font
-    if not font_code and not superscript and not subscript:
-        embedded = _resolve_full_font(family, bold, italic, page, doc)
-        if embedded:
-            font_code = embedded
+    orig_font_obj = None
+    orig_font_buffer = None
+    orig_font_reg_name = None
+    clone_font_obj = None
+    clone_font_buffer = None
+    clone_font_file = None
+    clone_font_reg_name = None
+    missing_chars = []
 
-    # 3) Base-14 fallback
-    if not font_code:
-        font_code = _resolve_base14(font_name or original_font_name or family or 'Helvetica')
+    if orig_entry:
+        orig_font_obj = orig_entry.get('font_obj')
+        orig_font_buffer = orig_entry.get('buffer')
+        if orig_font_obj:
+            for ch in text:
+                if ch.strip() and not _has_glyph(orig_font_obj, ch):
+                    if ch not in missing_chars:
+                        missing_chars.append(ch)
 
-    log(f"  Insert '{str(text)[:22]}' font={font_code} "
-        f"(family={family}, bold={bold}, italic={italic}, "
-        f"extracted={used_extracted}, preserve={preserve_original_font})")
+        if missing_chars:
+            clone_font_obj, clone_font_buffer, clone_font_file, _cf = _get_clone_font(
+                page, doc, original_font_name, bold_flag, italic_flag
+            )
 
-    # ------------------------------------------------------------------
-    # Compute x position (alignment via manual x, page-wide for center/right)
-    # ------------------------------------------------------------------
-    try:
-        text_w = fitz.get_text_length(str(text), fontname=font_code, fontsize=eff_size)
-        if use_char_spacing:
-            text_w += char_spacing * max(0, len(str(text)) - 1)
-        text_w *= h_scale
-    except Exception:
-        try:
-            text_w = fitz.get_text_length(str(text), fontname='helv', fontsize=eff_size)
-        except Exception:
-            text_w = (x1 - x0)
+        if orig_font_buffer:
+            orig_font_reg_name = _register_font_buffer(
+                page, doc, orig_font_buffer, f"orig:{orig_entry.get('xref')}"
+            )
+        if clone_font_file:
+            clone_font_reg_name = _register_font_file(
+                page, doc, clone_font_file,
+                f"clone_file:{original_font_name}:{bold_flag}:{italic_flag}"
+            )
+        if not clone_font_reg_name and clone_font_buffer:
+            clone_font_reg_name = _register_font_buffer(
+                page, doc, clone_font_buffer,
+                f"clone_buf:{original_font_name}:{bold_flag}:{italic_flag}"
+            )
+
+    log(f"  [_insert_text_span] orig={'yes' if orig_font_obj else 'NO'} "
+        f"clone={'yes' if clone_font_obj else 'no'} missing={missing_chars[:6]} "
+        f"orig_reg={orig_font_reg_name} clone_reg={clone_font_reg_name}")
+
+    def which_font(ch):
+        if orig_font_obj and orig_font_reg_name and _has_glyph(orig_font_obj, ch):
+            return 'orig'
+        if clone_font_reg_name:
+            return 'clone'
+        if orig_font_reg_name:
+            return 'orig'
+        return 'none'
+
+    segments = []
+    cur_kind = None
+    cur_text = ''
+    for ch in text:
+        if ch == '\n':
+            if cur_text:
+                segments.append((cur_kind, cur_text))
+            cur_kind = None
+            cur_text = ''
+            segments.append(('newline', '\n'))
+            continue
+        kind = which_font(ch)
+        if kind != cur_kind:
+            if cur_text:
+                segments.append((cur_kind, cur_text))
+            cur_kind = kind
+            cur_text = ch
+        else:
+            cur_text += ch
+    if cur_text:
+        segments.append((cur_kind, cur_text))
+
+    log(f"    segments: {[(k, t[:12]) for k, t in segments]}")
+
+    def seg_width(seg_text):
+        w = 0.0
+        for ch in seg_text:
+            if orig_font_obj and _has_glyph(orig_font_obj, ch):
+                try:
+                    w += orig_font_obj.text_length(ch, fontsize=eff_size)
+                    continue
+                except Exception:
+                    pass
+            if clone_font_obj:
+                try:
+                    w += clone_font_obj.text_length(ch, fontsize=eff_size)
+                    continue
+                except Exception:
+                    pass
+            if orig_font_obj:
+                try:
+                    w += orig_font_obj.text_length(ch, fontsize=eff_size)
+                    continue
+                except Exception:
+                    pass
+            w += eff_size * 0.5
+        return w
+
+    total_w = sum(seg_width(t) for k, t in segments if k != 'newline')
+    if use_char_spacing:
+        total_w += char_spacing * max(0, len(text) - 1)
+    total_w *= h_scale
 
     page_rect = page.rect
     page_left = page_rect.x0
@@ -432,84 +786,96 @@ def _insert_text_span(page, doc, x0, y0, x1, y1, text, font_name, font_size, col
 
     ins_x = x0
     if align == 'center':
-        ins_x = page_left + (page_width - text_w) / 2.0
+        ins_x = page_left + (page_width - total_w) / 2.0
     elif align == 'right':
-        ins_x = page_right - left_margin - text_w
-    # justify → left (single-line span)
+        ins_x = page_right - left_margin - total_w
 
-    inserted = False
+    inserted_any = False
+    x_cursor = ins_x
+    y_cursor = baseline_y
 
-    # TIER 1: char-spacing via TextWriter
-    if use_char_spacing:
+    for kind, seg in segments:
+        if kind == 'newline':
+            x_cursor = ins_x
+            y_cursor += eff_size * 1.2
+            continue
+        if not seg:
+            continue
+
+        reg_name = None
+        if kind == 'orig':
+            reg_name = orig_font_reg_name
+        elif kind == 'clone':
+            reg_name = clone_font_reg_name
+
+        if reg_name is None:
+            family, _ = detect_font_info(font_name or original_font_name or 'Helvetica')
+            sys_path = _pick_system_file(family, bold_flag, italic_flag)
+            if sys_path:
+                reg_name = _register_font_file(page, doc, sys_path, f"sys:{sys_path}")
+            if reg_name is None and family in GOOGLE_FONT_FAMILIES:
+                weight = 700 if bold_flag else 400
+                path = _download_google_font(family, weight, italic_flag)
+                if not path and bold_flag:
+                    path = _download_google_font(family, 400, italic_flag)
+                if path:
+                    reg_name = _register_font_file(page, doc, path, f"gf:{family}:{weight}:{italic_flag}")
+
+        if reg_name is None:
+            reg_name = 'helv'
+
         try:
-            writer = fitz.TextWriter(page.rect)
-            font_obj = fitz.Font(fontname=font_code)
-            x = ins_x
-            y = baseline_y
-            for i, line in enumerate(str(text).split('\n')):
-                if i > 0:
-                    x = ins_x
-                    y += eff_size * 1.2
-                for ch in line:
-                    writer.append((x, y), ch, font=font_obj, fontsize=eff_size)
-                    x += font_obj.text_length(ch, fontsize=eff_size) + char_spacing
-            kw = {'color': color}
-            if use_h_scale:
-                kw['morph'] = (fitz.Point(ins_x, baseline_y),
-                               fitz.Matrix(h_scale, 0, 0, 1, 0, 0))
-            writer.write_text(page, **kw)
-            inserted = True
+            page.insert_text(
+                fitz.Point(x_cursor, y_cursor), seg,
+                fontname=reg_name,
+                fontsize=eff_size,
+                color=color,
+                fill=color,
+                render_mode=2,
+                overlay=True,
+            )
+            inserted_any = True
+            log(f"    Inserted {kind} segment '{seg[:15]}' x={x_cursor:.1f} y={y_cursor:.1f} font={reg_name}")
         except Exception as e:
-            log(f"  Tier-1 failed: {e}")
+            log(f"    insert_text failed for '{seg[:15]}' ({kind}): {e}")
+            try:
+                page.insert_text(
+                    fitz.Point(x_cursor, y_cursor), seg,
+                    fontname='helv', fontsize=eff_size,
+                    color=color, fill=color, render_mode=2, overlay=True,
+                )
+                inserted_any = True
+                log(f"    helv fallback OK for '{seg[:15]}'")
+            except Exception as e2:
+                log(f"    helv fallback FAILED for '{seg[:15]}': {e2}")
 
-    # TIER 2: styled insert_text
-    if not inserted:
-        try:
-            point = fitz.Point(ins_x, baseline_y)
-            kw = dict(fontname=font_code, fontsize=eff_size)
-            if use_outline:
-                kw['render_mode'] = 2
-                kw['fill'] = color
-                kw['color'] = to_color_tuple(outline_color)
-            else:
-                kw['color'] = color
-            if use_h_scale:
-                kw['morph'] = (fitz.Point(ins_x, baseline_y),
-                               fitz.Matrix(h_scale, 0, 0, 1, 0, 0))
-            page.insert_text(point, str(text), **kw)
-            inserted = True
-        except Exception as e:
-            log(f"  Tier-2 failed: {e}")
+        x_cursor += seg_width(seg) * h_scale
+        if use_char_spacing:
+            x_cursor += char_spacing * max(0, len(seg) - 1)
 
-    # TIER 3: bare Helvetica
-    if not inserted:
-        try:
-            page.insert_text(fitz.Point(ins_x, baseline_y), str(text),
-                             fontname='helv', fontsize=eff_size, color=color)
-            inserted = True
-            log("  Tier-3 fallback (Helvetica)")
-        except Exception as e:
-            log(f"  Tier-3 FAILED: {e}")
+    actual_width = x_cursor - ins_x
 
-    # Decorations
-    if inserted and (underline or strike):
+    if not inserted_any:
+        log(f"    !!! No segment could be inserted for '{text[:30]}'")
+        return
+
+    if underline or strike:
         try:
-            eff_w = fitz.get_text_length(str(text), fontname=font_code, fontsize=eff_size)
-            if use_char_spacing:
-                eff_w += char_spacing * max(0, len(str(text)) - 1)
-            eff_w *= h_scale
+            final_w = actual_width
             if underline:
                 uy = baseline_y + eff_size * 0.12
-                page.draw_line(fitz.Point(ins_x, uy),
-                               fitz.Point(ins_x + eff_w, uy),
-                               color=color, width=max(0.5, eff_size * 0.05))
+                page.draw_line(
+                    fitz.Point(ins_x, uy), fitz.Point(ins_x + final_w, uy),
+                    color=color, width=max(0.5, eff_size * 0.05),
+                )
             if strike:
                 sy = baseline_y - eff_size * 0.32
-                page.draw_line(fitz.Point(ins_x, sy),
-                               fitz.Point(ins_x + eff_w, sy),
-                               color=color, width=max(0.5, eff_size * 0.05))
+                page.draw_line(
+                    fitz.Point(ins_x, sy), fitz.Point(ins_x + final_w, sy),
+                    color=color, width=max(0.5, eff_size * 0.05),
+                )
         except Exception as e:
-            log(f"  Underline/strike failed: {e}")
+            log(f"    Decoration failed: {e}")
 
 
 # ===========================================================================
@@ -563,6 +929,103 @@ def _draw_shape(page, shape_type, x0, y0, x1, y1, stroke_color, stroke_width, fi
 
 
 # ===========================================================================
+# HIGHLIGHT
+# ===========================================================================
+def _draw_highlight(page, x0, y0, x1, y1, color, opacity):
+    rect = fitz.Rect(min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
+    fill_col = to_color_tuple(color)
+    op = max(0.05, min(1.0, float(opacity or 0.4)))
+    # Try the extended signature first
+    try:
+        page.draw_rect(
+            rect,
+            color=None,
+            fill=fill_col,
+            width=0,
+            fill_opacity=op,
+            stroke_opacity=0,
+            overlay=True,
+        )
+        log(f"  Drew highlight ({fill_col}) opacity={op} at {rect}")
+        return
+    except TypeError:
+        pass
+    except Exception as e:
+        log(f"highlight draw (modern) failed: {e}")
+
+    # Fallback without opacity support
+    try:
+        page.draw_rect(rect, color=None, fill=fill_col, width=0, overlay=True)
+        log(f"  Drew highlight (fallback, no opacity) at {rect}")
+    except Exception as e:
+        log(f"highlight draw failed: {e}")
+
+
+# ===========================================================================
+# IMAGE
+# ===========================================================================
+def _draw_image(page, x0, y0, x1, y1, data_url):
+    if not data_url or ',' not in data_url:
+        log("  image: no valid dataUrl")
+        return
+    try:
+        b64 = data_url.split(',', 1)[1]
+        img_bytes = base64.b64decode(b64)
+    except Exception as e:
+        log(f"  image decode failed: {e}")
+        return
+    rect = fitz.Rect(min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
+    try:
+        page.insert_image(rect, stream=img_bytes, overlay=True)
+        log(f"  Inserted image into {rect}")
+    except Exception as e:
+        log(f"  insert_image failed: {e}")
+
+
+# ===========================================================================
+# FREEHAND
+# ===========================================================================
+def _draw_freehand(page, points, color, stroke_width, opacity):
+    if not points or len(points) < 2:
+        return
+    pts = []
+    for p in points:
+        try:
+            pts.append(fitz.Point(float(p.get('x', 0)), float(p.get('y', 0))))
+        except Exception:
+            continue
+    if len(pts) < 2:
+        return
+    col = to_color_tuple(color)
+    sw = max(0.5, float(stroke_width or 3))
+    op = max(0.05, min(1.0, float(opacity or 1.0)))
+    try:
+        sh = page.new_shape()
+        sh.draw_polyline(pts)
+        kw = dict(color=col, width=sw, lineCap=1, lineJoin=1)
+        if op < 0.99:
+            kw['stroke_opacity'] = op
+        sh.finish(**kw)
+        sh.commit(overlay=True)
+        log(f"  Drew freehand with {len(pts)} points")
+        return
+    except TypeError:
+        pass
+    except Exception as e:
+        log(f"  freehand draw (modern) failed: {e}")
+
+    # Fallback
+    try:
+        sh = page.new_shape()
+        sh.draw_polyline(pts)
+        sh.finish(color=col, width=sw)
+        sh.commit()
+        log(f"  Drew freehand (fallback, no opacity) with {len(pts)} points")
+    except Exception as e:
+        log(f"  freehand draw failed: {e}")
+
+
+# ===========================================================================
 # MAIN
 # ===========================================================================
 def perform_edits(input_path, output_path, edits, additions):
@@ -587,6 +1050,10 @@ def perform_edits(input_path, output_path, edits, additions):
         page_additions = additions_by_page.get(page_num, [])
         log(f"--- Page {page_num}: {len(page_edits)} edits, {len(page_additions)} additions")
 
+        # PRE-EXTRACT FONTS BEFORE REDACTION
+        font_cache = pre_extract_page_fonts(page, doc, page_num) if page_edits else {}
+
+        # REDACT + RE-INSERT EDITS
         if page_edits:
             for e in page_edits:
                 bbox = e.get('bbox')
@@ -628,6 +1095,8 @@ def perform_edits(input_path, output_path, edits, additions):
                     e.get('color', [0.0, 0.0, 0.0]),
                     original_font_name=e.get('originalFontName'),
                     preserve_original_font=bool(e.get('preserveOriginalFont', False)),
+                    family_explicit=bool(e.get('familyExplicit', False)),
+                    font_cache=font_cache,
                     align=(e.get('align') or 'left').lower(),
                     underline=bool(e.get('underline')),
                     strike=bool(e.get('strike')),
@@ -639,51 +1108,90 @@ def perform_edits(input_path, output_path, edits, additions):
                     outline_width=float(e.get('outlineWidth', 0) or 0),
                 )
 
+        # ADDITIONS
         for a in page_additions:
             try:
-                bbox = a.get('bbox') or {}
-                x0 = float(bbox.get('x0', 0)); y0 = float(bbox.get('y0', 0))
-                x1 = float(bbox.get('x1', 0)); y1 = float(bbox.get('y1', 0))
-            except Exception:
-                continue
+                a_type = a.get('type')
 
-            if a.get('type') == 'text':
-                text = a.get('text', '')
-                if not text: continue
-                font_size = float(a.get('fontSize', 14)) or 14
-                font_name = a.get('fontName', 'Helvetica')
-                if a.get('bold') and a.get('italic'): font_name = f"{font_name}-BoldItalic"
-                elif a.get('bold'): font_name = f"{font_name}-Bold"
-                elif a.get('italic'): font_name = f"{font_name}-Italic"
+                # -------- TEXT addition --------
+                if a_type == 'text':
+                    bbox = a.get('bbox') or {}
+                    x0 = float(bbox.get('x0', 0)); y0 = float(bbox.get('y0', 0))
+                    x1 = float(bbox.get('x1', 0)); y1 = float(bbox.get('y1', 0))
+                    text = a.get('text', '')
+                    if not text: continue
+                    font_size = float(a.get('fontSize', 14)) or 14
+                    font_name = a.get('fontName', 'Helvetica')
+                    if a.get('bold') and a.get('italic'): font_name = f"{font_name}-BoldItalic"
+                    elif a.get('bold'): font_name = f"{font_name}-Bold"
+                    elif a.get('italic'): font_name = f"{font_name}-Italic"
 
-                baseline = y1 if y1 > y0 else y0
-                ins_y0 = baseline - font_size * 0.9
-                ins_y1 = baseline + font_size * 0.15
+                    baseline = y1 if y1 > y0 else y0
+                    ins_y0 = baseline - font_size * 0.9
+                    ins_y1 = baseline + font_size * 0.15
 
-                _insert_text_span(
-                    page, doc, x0, ins_y0, x1, ins_y1,
-                    text, font_name, font_size,
-                    a.get('color', [0, 0, 0]),
-                    original_font_name=None,
-                    preserve_original_font=False,
-                    align=a.get('align', 'left'),
-                    underline=bool(a.get('underline')),
-                    strike=bool(a.get('strike')),
-                    superscript=bool(a.get('superscript')),
-                    subscript=bool(a.get('subscript')),
-                    char_spacing=float(a.get('charSpacing', 0) or 0),
-                    h_scale=float(a.get('hScale', 100) or 100) / 100.0,
-                    outline_color=a.get('outlineColor'),
-                    outline_width=float(a.get('outlineWidth', 0) or 0),
-                )
-            elif a.get('type') == 'shape':
-                _draw_shape(
-                    page, a.get('shapeType', 'rect'),
-                    x0, y0, x1, y1,
-                    to_color_tuple(a.get('strokeColor', [0, 0, 0])),
-                    float(a.get('strokeWidth', 2) or 2),
-                    to_color_tuple(a['fillColor']) if a.get('fillColor') else None,
-                )
+                    _insert_text_span(
+                        page, doc, x0, ins_y0, x1, ins_y1,
+                        text, font_name, font_size,
+                        a.get('color', [0, 0, 0]),
+                        original_font_name=None,
+                        preserve_original_font=False,
+                        family_explicit=True,
+                        font_cache=None,
+                        align=a.get('align', 'left'),
+                        underline=bool(a.get('underline')),
+                        strike=bool(a.get('strike')),
+                        superscript=bool(a.get('superscript')),
+                        subscript=bool(a.get('subscript')),
+                        char_spacing=float(a.get('charSpacing', 0) or 0),
+                        h_scale=float(a.get('hScale', 100) or 100) / 100.0,
+                        outline_color=a.get('outlineColor'),
+                        outline_width=float(a.get('outlineWidth', 0) or 0),
+                    )
+
+                # -------- SHAPE addition --------
+                elif a_type == 'shape':
+                    bbox = a.get('bbox') or {}
+                    x0 = float(bbox.get('x0', 0)); y0 = float(bbox.get('y0', 0))
+                    x1 = float(bbox.get('x1', 0)); y1 = float(bbox.get('y1', 0))
+                    _draw_shape(
+                        page, a.get('shapeType', 'rect'),
+                        x0, y0, x1, y1,
+                        to_color_tuple(a.get('strokeColor', [0, 0, 0])),
+                        float(a.get('strokeWidth', 2) or 2),
+                        to_color_tuple(a['fillColor']) if a.get('fillColor') else None,
+                    )
+
+                # -------- HIGHLIGHT addition --------
+                elif a_type == 'highlight':
+                    bbox = a.get('bbox') or {}
+                    x0 = float(bbox.get('x0', 0)); y0 = float(bbox.get('y0', 0))
+                    x1 = float(bbox.get('x1', 0)); y1 = float(bbox.get('y1', 0))
+                    _draw_highlight(
+                        page, x0, y0, x1, y1,
+                        a.get('color', [1, 0.93, 0.3]),
+                        float(a.get('opacity', 0.4) or 0.4),
+                    )
+
+                # -------- IMAGE addition --------
+                elif a_type == 'image':
+                    bbox = a.get('bbox') or {}
+                    x0 = float(bbox.get('x0', 0)); y0 = float(bbox.get('y0', 0))
+                    x1 = float(bbox.get('x1', 0)); y1 = float(bbox.get('y1', 0))
+                    _draw_image(page, x0, y0, x1, y1, a.get('dataUrl') or '')
+
+                # -------- FREEHAND addition --------
+                elif a_type == 'freehand':
+                    _draw_freehand(
+                        page,
+                        a.get('points') or [],
+                        a.get('color', [0.86, 0.15, 0.15]),
+                        float(a.get('strokeWidth', 3) or 3),
+                        float(a.get('opacity', 1) or 1),
+                    )
+
+            except Exception as ex:
+                log(f"addition handling error: {ex}")
 
     try:
         doc.save(output_path, garbage=4, deflate=True, clean=True)

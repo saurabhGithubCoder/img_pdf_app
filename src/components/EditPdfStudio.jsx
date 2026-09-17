@@ -4,7 +4,8 @@ import {
   ArrowLeft, Loader2, ChevronUp, ChevronDown, ZoomIn, ZoomOut, Maximize,
   Type, AlertCircle, Info, Check, MousePointerClick, RotateCcw, Download,
   ArrowRight, FileImage, Edit3, GripVertical, Trash2, Plus, Square, Circle,
-  Minus, ArrowUpRight, Triangle, Diamond,
+  Minus, ArrowUpRight, Triangle, Diamond, Highlighter, Image as ImageIcon,
+  Pencil, RefreshCw, X as CloseIcon,
   ChevronDown as ChevronDownIcon,
 } from 'lucide-react';
 import * as pdfjsLib from 'pdfjs-dist';
@@ -23,9 +24,11 @@ const COLOR_PALETTE = [
   [0.1, 0.2, 0.5], [0.1, 0.5, 0.5], [0.5, 0.3, 0.2], [0.95, 0.95, 0.95],
 ];
 
-// ---------------------------------------------------------------------------
-// Font family map — ~85 entries
-// ---------------------------------------------------------------------------
+const HIGHLIGHT_COLORS = [
+  [1, 0.93, 0.3], [0.55, 0.95, 0.45], [0.4, 0.75, 1],
+  [1, 0.6, 0.75], [1, 0.75, 0.4], [0.85, 0.6, 1],
+];
+
 const FONT_FAMILY_MAP = [
   { re: /^helvetica/i,           name: 'Helvetica',         css: 'Helvetica, Arial, "Liberation Sans", sans-serif',          fb: 'sans-serif' },
   { re: /^arial/i,               name: 'Arial',             css: 'Arial, Helvetica, "Liberation Sans", sans-serif',          fb: 'sans-serif' },
@@ -52,18 +55,12 @@ const FONT_FAMILY_MAP = [
   { re: /^frutiger/i,            name: 'Frutiger',          css: 'Frutiger, "Segoe UI", Arial, sans-serif',                   fb: 'sans-serif' },
   { re: /^palatino|^bookantiqua|^urwpalladio/i, name: 'Palatino', css: 'Palatino, "Book Antiqua", "URW Palladio L", serif',      fb: 'serif' },
   { re: /^bookman/i,             name: 'Bookman',           css: '"Bookman Old Style", Bookman, serif',                       fb: 'serif' },
-  { re: /^century|^newschoolbook/i, name: 'Century Schoolbook', css: '"Century Schoolbook", "New Century Schoolbook", serif', fb: 'serif' },
   { re: /^baskerville|^librebask/i, name: 'Baskerville',    css: 'Baskerville, "Libre Baskerville", serif',                    fb: 'serif' },
   { re: /^caslon/i,              name: 'Caslon',            css: 'Caslon, "Libre Caslon Text", serif',                         fb: 'serif' },
   { re: /^optima/i,              name: 'Optima',            css: 'Optima, "Segoe UI", sans-serif',                             fb: 'sans-serif' },
   { re: /^futura/i,              name: 'Futura',            css: 'Futura, "Century Gothic", sans-serif',                       fb: 'sans-serif' },
   { re: /^avenir/i,              name: 'Avenir',            css: 'Avenir, "Century Gothic", sans-serif',                       fb: 'sans-serif' },
   { re: /^centurygothic/i,       name: 'Century Gothic',    css: '"Century Gothic", Futura, sans-serif',                       fb: 'sans-serif' },
-  { re: /^gillsans/i,            name: 'Gill Sans',         css: '"Gill Sans", "Trebuchet MS", sans-serif',                    fb: 'sans-serif' },
-  { re: /^franklin/i,            name: 'Franklin Gothic',   css: '"Franklin Gothic Medium", "Franklin Gothic", Arial, sans-serif', fb: 'sans-serif' },
-  { re: /^candara/i,             name: 'Candara',           css: 'Candara, "Segoe UI", Arial, sans-serif',                     fb: 'sans-serif' },
-  { re: /^corbel/i,              name: 'Corbel',            css: 'Corbel, "Segoe UI", Arial, sans-serif',                      fb: 'sans-serif' },
-  { re: /^constantia/i,          name: 'Constantia',        css: 'Constantia, Cambria, serif',                                fb: 'serif' },
   { re: /^roboto$|^robotosans/i, name: 'Roboto',            css: 'Roboto, Arial, sans-serif',                                 fb: 'sans-serif' },
   { re: /^opensans/i,            name: 'Open Sans',         css: '"Open Sans", Arial, sans-serif',                            fb: 'sans-serif' },
   { re: /^lato/i,                name: 'Lato',              css: 'Lato, Arial, sans-serif',                                    fb: 'sans-serif' },
@@ -125,10 +122,7 @@ function stripStyleSuffixes(name) {
     '-Regular', ' Regular', '-Roman', ' Roman',
   ];
   for (const suf of suffixes) {
-    if (s.endsWith(suf)) {
-      s = s.slice(0, -suf.length);
-      break;
-    }
+    if (s.endsWith(suf)) { s = s.slice(0, -suf.length); break; }
   }
   s = s.replace(/(MT|PS|MS|Std|Pro)$/i, '').trim();
   return s;
@@ -138,29 +132,14 @@ function parseFontFallback(rawName) {
   const original = (rawName || 'Helvetica').replace(/^[A-Z]{6}\+/, '');
   const isBold = /bold|black|heavy|semibold|demibold|extrabold/i.test(original);
   const isItalic = /italic|oblique/i.test(original);
-
   const detectedFamily = stripStyleSuffixes(original) || 'Helvetica';
   const normalized = detectedFamily.toLowerCase().replace(/[\s\-_]/g, '');
-
   for (const entry of FONT_FAMILY_MAP) {
     if (entry.re.test(normalized)) {
-      return {
-        family: entry.css,
-        detectedFamily: entry.name,
-        isBold,
-        isItalic,
-        cssFallback: entry.fb,
-      };
+      return { family: entry.css, detectedFamily: entry.name, isBold, isItalic, cssFallback: entry.fb };
     }
   }
-
-  return {
-    family: `"${detectedFamily}", Arial, sans-serif`,
-    detectedFamily,
-    isBold,
-    isItalic,
-    cssFallback: 'sans-serif',
-  };
+  return { family: `"${detectedFamily}", Arial, sans-serif`, detectedFamily, isBold, isItalic, cssFallback: 'sans-serif' };
 }
 
 function cssStackFromFamily(family) {
@@ -243,9 +222,6 @@ function sampleSpanColor(ctx, span) {
   } catch { return [0, 0, 0]; }
 }
 
-// ---------------------------------------------------------------------------
-// contentEditable box — sizes to its text, no fixed width
-// ---------------------------------------------------------------------------
 function TextEditBox({ initialText, style, onInput, onCommit, onCancel, onMouseDownInternal }) {
   const ref = useRef(null);
   const committedRef = useRef(false);
@@ -263,6 +239,7 @@ function TextEditBox({ initialText, style, onInput, onCommit, onCancel, onMouseD
       sel.addRange(range);
     } catch { /* ignore */ }
     el.focus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleKeyDown = (e) => {
@@ -293,9 +270,6 @@ function TextEditBox({ initialText, style, onInput, onCommit, onCancel, onMouseD
   );
 }
 
-// ---------------------------------------------------------------------------
-// Quick actions toolbar
-// ---------------------------------------------------------------------------
 function QuickActionsToolbar({ onDelete, onMoveStart, position }) {
   return (
     <div
@@ -319,11 +293,7 @@ function QuickActionsToolbar({ onDelete, onMoveStart, position }) {
 function ShapeRenderer({ shapeType, strokeColor, strokeWidth, fillColor }) {
   const stroke = rgbToCss(strokeColor);
   const fill = fillColor ? rgbToCss(fillColor) : 'none';
-  const common = {
-    stroke, strokeWidth, fill,
-    vectorEffect: 'non-scaling-stroke',
-    strokeLinejoin: 'round', strokeLinecap: 'round',
-  };
+  const common = { stroke, strokeWidth, fill, vectorEffect: 'non-scaling-stroke', strokeLinejoin: 'round', strokeLinecap: 'round' };
   return (
     <svg width="100%" height="100%" viewBox="0 0 100 100" preserveAspectRatio="none"
       style={{ display: 'block', overflow: 'visible', pointerEvents: 'none' }}>
@@ -342,7 +312,7 @@ function ShapeRenderer({ shapeType, strokeColor, strokeWidth, fillColor }) {
   );
 }
 
-function ShapeColorButton({ value, onChange, title, allowNone }) {
+function ColorDropdown({ value, onChange, title, palette = COLOR_PALETTE, allowNone = false }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
   useEffect(() => {
@@ -372,7 +342,7 @@ function ShapeColorButton({ value, onChange, title, allowNone }) {
               onClick={() => { onChange(null); setOpen(false); }}
               className={`w-5 h-5 rounded-md border text-[9px] text-slate-300 ${isNone ? 'border-blue-400 ring-2 ring-blue-500/50' : 'border-slate-600'}`}>∅</button>
           )}
-          {COLOR_PALETTE.map((c, i) => {
+          {palette.map((c, i) => {
             const active = !isNone && Math.abs(c[0] - current[0]) < 0.01 && Math.abs(c[1] - current[1]) < 0.01 && Math.abs(c[2] - current[2]) < 0.01;
             return (
               <button key={i} type="button"
@@ -387,8 +357,9 @@ function ShapeColorButton({ value, onChange, title, allowNone }) {
   );
 }
 
-function ShapeToolbar({ addition, onChange, onDelete, onMoveStart, position }) {
+function AdditionToolbar({ addition, onChange, onDelete, onMoveStart, onReplaceImage, position }) {
   if (!addition) return null;
+
   return (
     <div
       data-in-edit-toolbar="1"
@@ -400,25 +371,63 @@ function ShapeToolbar({ addition, onChange, onDelete, onMoveStart, position }) {
         <GripVertical className="w-3.5 h-3.5" />
       </button>
       <div className="w-px h-4 bg-slate-700" />
-      <ShapeColorButton
-        value={addition.strokeColor || [0, 0, 0]}
-        onChange={(c) => onChange({ strokeColor: c })}
-        title="Stroke color"
-      />
-      <div className="flex items-center gap-1 ml-1">
-        <span className="text-[10px] text-slate-400">W</span>
-        <input type="range" min="1" max="20" value={addition.strokeWidth ?? 2}
-          onChange={(e) => onChange({ strokeWidth: Number(e.target.value) })}
-          className="w-16 accent-blue-500" />
-        <span className="text-[10px] text-slate-300 w-4 text-right">{addition.strokeWidth ?? 2}</span>
-      </div>
-      <div className="w-px h-4 bg-slate-700" />
-      <ShapeColorButton
-        value={addition.fillColor}
-        onChange={(c) => onChange({ fillColor: c })}
-        title="Fill color"
-        allowNone
-      />
+
+      {(addition.type === 'shape') && (
+        <>
+          <ColorDropdown value={addition.strokeColor || [0, 0, 0]} onChange={(c) => onChange({ strokeColor: c })} title="Stroke color" />
+          <div className="flex items-center gap-1 ml-1">
+            <span className="text-[10px] text-slate-400">W</span>
+            <input type="range" min="1" max="20" value={addition.strokeWidth ?? 2}
+              onChange={(e) => onChange({ strokeWidth: Number(e.target.value) })}
+              className="w-16 accent-blue-500" />
+            <span className="text-[10px] text-slate-300 w-4 text-right">{addition.strokeWidth ?? 2}</span>
+          </div>
+          <div className="w-px h-4 bg-slate-700" />
+          <ColorDropdown value={addition.fillColor} onChange={(c) => onChange({ fillColor: c })} title="Fill color" allowNone />
+        </>
+      )}
+
+      {addition.type === 'highlight' && (
+        <>
+          <ColorDropdown value={addition.color || [1, 0.93, 0.3]} onChange={(c) => onChange({ color: c })} title="Highlight color" palette={HIGHLIGHT_COLORS} />
+          <div className="flex items-center gap-1 ml-1">
+            <span className="text-[10px] text-slate-400">Op</span>
+            <input type="range" min="10" max="90" value={Math.round((addition.opacity ?? 0.4) * 100)}
+              onChange={(e) => onChange({ opacity: Number(e.target.value) / 100 })}
+              className="w-16 accent-yellow-500" />
+            <span className="text-[10px] text-slate-300 w-8 text-right">{Math.round((addition.opacity ?? 0.4) * 100)}%</span>
+          </div>
+        </>
+      )}
+
+      {addition.type === 'image' && (
+        <button type="button" onClick={onReplaceImage}
+          className="px-2 h-7 rounded-md text-[11px] font-semibold flex items-center gap-1 hover:bg-slate-700 transition">
+          <RefreshCw className="w-3.5 h-3.5" /> Replace
+        </button>
+      )}
+
+      {addition.type === 'freehand' && (
+        <>
+          <ColorDropdown value={addition.color || [0.86, 0.15, 0.15]} onChange={(c) => onChange({ color: c })} title="Stroke color" />
+          <div className="flex items-center gap-1 ml-1">
+            <span className="text-[10px] text-slate-400">W</span>
+            <input type="range" min="1" max="20" value={addition.strokeWidth ?? 3}
+              onChange={(e) => onChange({ strokeWidth: Number(e.target.value) })}
+              className="w-16 accent-red-500" />
+            <span className="text-[10px] text-slate-300 w-4 text-right">{addition.strokeWidth ?? 3}</span>
+          </div>
+          <div className="w-px h-4 bg-slate-700" />
+          <div className="flex items-center gap-1">
+            <span className="text-[10px] text-slate-400">Op</span>
+            <input type="range" min="10" max="100" value={Math.round((addition.opacity ?? 1) * 100)}
+              onChange={(e) => onChange({ opacity: Number(e.target.value) / 100 })}
+              className="w-14 accent-blue-500" />
+            <span className="text-[10px] text-slate-300 w-8 text-right">{Math.round((addition.opacity ?? 1) * 100)}%</span>
+          </div>
+        </>
+      )}
+
       <div className="w-px h-4 bg-slate-700" />
       <button type="button" onClick={onDelete}
         className="w-7 h-7 rounded-md flex items-center justify-center text-red-300 hover:bg-red-600 hover:text-white transition">
@@ -428,9 +437,10 @@ function ShapeToolbar({ addition, onChange, onDelete, onMoveStart, position }) {
   );
 }
 
-function ToolsBar({ toolMode, setToolMode }) {
+function ToolsBar({ toolMode, setToolMode, onImageReady, hasPendingImage, onCancelImage }) {
   const [shapesOpen, setShapesOpen] = useState(false);
   const shapesWrapRef = useRef(null);
+  const imageInputRef = useRef(null);
 
   useEffect(() => {
     if (!shapesOpen) return;
@@ -440,6 +450,23 @@ function ToolsBar({ toolMode, setToolMode }) {
     document.addEventListener('mousedown', onDoc);
     return () => document.removeEventListener('mousedown', onDoc);
   }, [shapesOpen]);
+
+  const handleImageFile = async (e) => {
+    const f = e.target.files?.[0];
+    e.target.value = '';
+    if (!f) return;
+    try {
+      const dataUrl = await new Promise((res, rej) => {
+        const reader = new FileReader();
+        reader.onload = () => res(reader.result);
+        reader.onerror = rej;
+        reader.readAsDataURL(f);
+      });
+      onImageReady({ file: f, dataUrl });
+    } catch (err) {
+      console.error('Image read failed:', err);
+    }
+  };
 
   const shapes = [
     { id: 'rect',     label: 'Rectangle', short: 'Rect',     icon: Square },
@@ -451,16 +478,16 @@ function ToolsBar({ toolMode, setToolMode }) {
   ];
   const shapesActive = shapes.some((s) => s.id === toolMode);
 
+  const btnBase = 'px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition cursor-pointer';
+  const btnIdle = 'text-slate-700 hover:bg-slate-100';
+  const btnActive = 'bg-rose-600 text-white shadow-sm';
+
   return (
     <div data-in-edit-toolbar="1"
-      className="absolute top-3 left-1/2 -translate-x-1/2 z-40 flex items-center gap-2 bg-white border border-slate-200 rounded-2xl shadow-lg px-2 py-1.5">
-      <button
-        type="button"
-        onClick={() => { setToolMode(toolMode === 'text' ? null : 'text'); setShapesOpen(false); }}
-        className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition cursor-pointer ${
-          toolMode === 'text' ? 'bg-rose-600 text-white shadow-sm' : 'text-slate-700 hover:bg-slate-100'
-        }`}
-      >
+      className="flex items-center gap-2 flex-wrap bg-white border border-slate-200 rounded-2xl shadow-sm px-3 py-2 w-max">
+      <button type="button"
+        onClick={() => { setToolMode(toolMode === 'text' ? null : 'text'); setShapesOpen(false); if (hasPendingImage) onCancelImage(); }}
+        className={`${btnBase} ${toolMode === 'text' ? btnActive : btnIdle}`}>
         <Plus className="w-3.5 h-3.5" />
         <span>Add Text</span>
       </button>
@@ -468,13 +495,9 @@ function ToolsBar({ toolMode, setToolMode }) {
       <div className="w-px h-5 bg-slate-200" />
 
       <div ref={shapesWrapRef} className="relative">
-        <button
-          type="button"
-          onClick={() => setShapesOpen((v) => !v)}
-          className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition cursor-pointer ${
-            shapesActive ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-700 hover:bg-slate-100'
-          }`}
-        >
+        <button type="button"
+          onClick={() => { setShapesOpen((v) => !v); if (hasPendingImage) onCancelImage(); }}
+          className={`${btnBase} ${shapesActive ? 'bg-blue-600 text-white shadow-sm' : btnIdle}`}>
           <Square className="w-3.5 h-3.5" />
           <span>Shapes</span>
           <ChevronDownIcon className={`w-3 h-3 transition-transform ${shapesOpen ? 'rotate-180' : ''}`} />
@@ -482,7 +505,7 @@ function ToolsBar({ toolMode, setToolMode }) {
 
         {shapesOpen && (
           <div data-in-edit-toolbar="1"
-            className="absolute top-full right-0 mt-2 p-2 bg-white border border-slate-200 rounded-2xl shadow-2xl z-[60] w-max">
+            className="absolute top-full left-0 mt-2 p-2 bg-white border border-slate-200 rounded-2xl shadow-2xl z-[60] w-max">
             <div className="grid grid-cols-3 gap-1">
               {shapes.map((s) => {
                 const Icon = s.icon;
@@ -504,11 +527,40 @@ function ToolsBar({ toolMode, setToolMode }) {
         )}
       </div>
 
+      <div className="w-px h-5 bg-slate-200" />
+
+      <button type="button"
+        onClick={() => { setToolMode(toolMode === 'highlight' ? null : 'highlight'); setShapesOpen(false); if (hasPendingImage) onCancelImage(); }}
+        className={`${btnBase} ${toolMode === 'highlight' ? 'bg-yellow-400 text-slate-900 shadow-sm' : btnIdle}`}>
+        <Highlighter className="w-3.5 h-3.5" />
+        <span>Highlight</span>
+      </button>
+
+      <button type="button"
+        onClick={() => { if (hasPendingImage) { onCancelImage(); } else imageInputRef.current?.click(); }}
+        className={`${btnBase} ${hasPendingImage ? 'bg-emerald-600 text-white shadow-sm' : btnIdle}`}>
+        <ImageIcon className="w-3.5 h-3.5" />
+        <span>{hasPendingImage ? 'Click to place' : 'Image'}</span>
+        {hasPendingImage && <CloseIcon className="w-3 h-3 ml-1 opacity-80" />}
+      </button>
+      <input ref={imageInputRef} type="file" accept="image/png,image/jpeg,image/gif,image/webp" className="hidden" onChange={handleImageFile} />
+
+      <button type="button"
+        onClick={() => { setToolMode(toolMode === 'draw' ? null : 'draw'); setShapesOpen(false); if (hasPendingImage) onCancelImage(); }}
+        className={`${btnBase} ${toolMode === 'draw' ? 'bg-red-600 text-white shadow-sm' : btnIdle}`}>
+        <Pencil className="w-3.5 h-3.5" />
+        <span>Draw</span>
+      </button>
+
       {toolMode && (
         <>
           <div className="w-px h-5 bg-slate-200" />
           <span className="text-[10px] text-slate-500 font-medium pr-1">
-            {toolMode === 'text' ? 'Click to place text' : 'Click & drag to draw'}
+            {toolMode === 'text' && 'Click to place text'}
+            {toolMode === 'highlight' && 'Drag to highlight'}
+            {toolMode === 'draw' && 'Draw on the page'}
+            {toolMode === 'image' && (hasPendingImage ? 'Click & drag to place' : 'Select an image first')}
+            {shapesActive && 'Click & drag to draw'}
           </span>
         </>
       )}
@@ -516,17 +568,12 @@ function ToolsBar({ toolMode, setToolMode }) {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Style helpers
-// ---------------------------------------------------------------------------
 function getEffectiveStyle(span, style) {
   const family = style?.fontFamily || span.fontFamily;
   const originalSize = style?.fontSize ?? span.pdfFontSize;
   let size = originalSize;
-
   const bold = style?.bold != null ? style.bold : span.isBold;
   const italic = style?.italic != null ? style.italic : span.isItalic;
-
   const sup = Boolean(style?.superscript);
   const sub = !sup && Boolean(style?.subscript);
   if (sup || sub) size = originalSize * 0.65;
@@ -559,7 +606,6 @@ function cssStackFor(span, style) {
 function composeBackendFontName(span, style) {
   const bold = style?.bold != null ? style.bold : span.isBold;
   const italic = style?.italic != null ? style.italic : span.isItalic;
-
   let baseFamily;
   if (style?.fontFamily) {
     baseFamily = style.fontFamily;
@@ -574,7 +620,6 @@ function composeBackendFontName(span, style) {
       baseFamily = 'Helvetica';
     }
   }
-
   let name = baseFamily;
   if (bold && italic) name += '-BoldItalic';
   else if (bold) name += '-Bold';
@@ -600,29 +645,19 @@ function buildEdit(span, draftText, activeStyle) {
     span.pdfYBaselineTopDown + span.pdfFontSize * 0.15,
   ];
 
-  const familyExplicit =
-    activeStyle.fontFamily != null && activeStyle.fontFamily !== '';
-  const fontChanged = familyExplicit;
-  const sizeChanged =
-    activeStyle.fontSize != null &&
-    Math.abs(activeStyle.fontSize - span.pdfFontSize) > 0.5;
-  const boldChanged =
-    activeStyle.bold != null && activeStyle.bold !== span.isBold;
-  const italicChanged =
-    activeStyle.italic != null && activeStyle.italic !== span.isItalic;
-  const colorChanged =
-    activeStyle.color != null && !colorsEqual(activeStyle.color, span.color);
+  const familyExplicit = activeStyle.fontFamily != null && activeStyle.fontFamily !== '';
+  const sizeChanged = activeStyle.fontSize != null && Math.abs(activeStyle.fontSize - span.pdfFontSize) > 0.5;
+  const boldChanged = activeStyle.bold != null && activeStyle.bold !== span.isBold;
+  const italicChanged = activeStyle.italic != null && activeStyle.italic !== span.isItalic;
+  const colorChanged = activeStyle.color != null && !colorsEqual(activeStyle.color, span.color);
   const textChanged = draftText !== span.text;
 
   const nothingChanged =
-    !textChanged && !fontChanged && !sizeChanged &&
-    !boldChanged && !italicChanged && !colorChanged &&
-    !activeStyle.underline && !activeStyle.strike &&
-    !activeStyle.superscript && !activeStyle.subscript &&
+    !textChanged && !familyExplicit && !sizeChanged && !boldChanged && !italicChanged && !colorChanged &&
+    !activeStyle.underline && !activeStyle.strike && !activeStyle.superscript && !activeStyle.subscript &&
     (activeStyle.align || 'left') === 'left' &&
-    activeStyle.lineSpacing == null && activeStyle.charSpacing == null &&
-    activeStyle.hScale == null && !activeStyle.outlineColor &&
-    (!activeStyle.outlineWidth || activeStyle.outlineWidth === 0) &&
+    activeStyle.lineSpacing == null && activeStyle.charSpacing == null && activeStyle.hScale == null &&
+    !activeStyle.outlineColor && (!activeStyle.outlineWidth || activeStyle.outlineWidth === 0) &&
     eff.offsetX === 0 && eff.offsetY === 0;
 
   if (nothingChanged) return null;
@@ -685,7 +720,7 @@ function emptyActiveStyle() {
 }
 
 // ===========================================================================
-// MAIN
+// MAIN COMPONENT
 // ===========================================================================
 export default function EditPdfStudio({ tool, file, onBack }) {
   const pdfDocRef = useRef(null);
@@ -694,6 +729,12 @@ export default function EditPdfStudio({ tool, file, onBack }) {
   const moveDragRef = useRef({ active: false, startX: 0, startY: 0, initX: 0, initY: 0 });
   const additionDragRef = useRef({ active: false });
   const drawingRectRef = useRef(null);
+  const freehandPathRef = useRef(null);
+  const freehandActiveRef = useRef(false);
+
+  // ---- Render deduplication refs (FIX) ----
+  const lastRenderKeyRef = useRef('');
+  const renderInFlightRef = useRef(false);
 
   const [loading, setLoading] = useState(true);
   const [rendering, setRendering] = useState(false);
@@ -702,7 +743,8 @@ export default function EditPdfStudio({ tool, file, onBack }) {
 
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
-  const [zoom, setZoom] = useState(0.5);
+
+  const [zoom, setZoom] = useState(null);
   const [userZoomed, setUserZoomed] = useState(false);
   const [naturalPageSize, setNaturalPageSize] = useState({ width: 0, height: 0 });
 
@@ -724,6 +766,14 @@ export default function EditPdfStudio({ tool, file, onBack }) {
   const [editingAdditionId, setEditingAdditionId] = useState(null);
   const [additionDraftText, setAdditionDraftText] = useState('');
 
+  const [pendingImage, setPendingImage] = useState(null);
+  const [freehandPoints, setFreehandPoints] = useState(null);
+
+  const [highlightColor, setHighlightColor] = useState([1, 0.93, 0.3]);
+  const [highlightOpacity, setHighlightOpacity] = useState(0.4);
+  const [freehandColor, setFreehandColor] = useState([0.86, 0.15, 0.15]);
+  const [freehandWidth, setFreehandWidth] = useState(3);
+
   const [toolbarPos, setToolbarPos] = useState({ x: -9999, y: -9999 });
   const [isMoving, setIsMoving] = useState(false);
 
@@ -737,9 +787,10 @@ export default function EditPdfStudio({ tool, file, onBack }) {
     additions, selectedAdditionId, editingAdditionId, additionDraftText,
   };
 
+  // Reset per file
   useEffect(() => {
     setUserZoomed(false);
-    setZoom(0.5);
+    setZoom(null);
     setNaturalPageSize({ width: 0, height: 0 });
     setEdits({});
     setAdditions([]);
@@ -748,14 +799,28 @@ export default function EditPdfStudio({ tool, file, onBack }) {
     setEditingAdditionId(null);
     setToolMode(null);
     setDrawingRect(null);
+    setPendingImage(null);
+    setFreehandPoints(null);
     drawingRectRef.current = null;
+    freehandPathRef.current = null;
+    freehandActiveRef.current = false;
     setActiveStyle(emptyActiveStyle());
+    setRendering(false);
+    setPageDataUrl('');
+    lastRenderKeyRef.current = '';
+    renderInFlightRef.current = false;
   }, [file]);
 
+  // Escape
   useEffect(() => {
     const onKey = (e) => {
       if (e.key !== 'Escape') return;
-      if (toolMode) { setToolMode(null); setDrawingRect(null); drawingRectRef.current = null; return; }
+      if (toolMode) {
+        setToolMode(null); setDrawingRect(null); drawingRectRef.current = null;
+        setFreehandPoints(null); freehandPathRef.current = null; freehandActiveRef.current = false;
+        setPendingImage(null);
+        return;
+      }
       if (editingAdditionId) { setEditingAdditionId(null); return; }
       if (selectedAdditionId) { setSelectedAdditionId(null); return; }
       if (selectedId) { cancelEdit(); return; }
@@ -765,29 +830,7 @@ export default function EditPdfStudio({ tool, file, onBack }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [toolMode, editingAdditionId, selectedAdditionId, selectedId]);
 
-  useEffect(() => {
-    const el = viewerOuterRef.current;
-    if (!el) return;
-    const update = () => setViewerSize({ w: el.clientWidth, h: el.clientHeight });
-    update();
-    let ro;
-    if (typeof ResizeObserver !== 'undefined') { ro = new ResizeObserver(update); ro.observe(el); }
-    window.addEventListener('resize', update);
-    return () => { if (ro) ro.disconnect(); window.removeEventListener('resize', update); };
-  }, [loading, loadFailed, result]);
-
-  useEffect(() => {
-    if (userZoomed || result) return;
-    if (!naturalPageSize.width || !naturalPageSize.height) return;
-    if (!viewerSize.w || !viewerSize.h) return;
-    const availW = viewerSize.w - 40;
-    const availH = viewerSize.h - 90;
-    if (availW <= 0 || availH <= 0) return;
-    const fitZoom = Math.min(availW / naturalPageSize.width, availH / naturalPageSize.height);
-    const clamped = Math.max(0.2, Math.min(3.0, fitZoom));
-    if (Math.abs(clamped - zoom) > 0.01) setZoom(clamped);
-  }, [naturalPageSize, viewerSize, userZoomed, zoom, result]);
-
+  // Load PDF
   useEffect(() => {
     let cancelled = false;
     pdfDocRef.current = null;
@@ -825,18 +868,84 @@ export default function EditPdfStudio({ tool, file, onBack }) {
     return () => { cancelled = true; };
   }, [file]);
 
+  // Viewer size — with equality check
   useEffect(() => {
-    if (loading || !pdfDocRef.current || loadFailed || result) return;
+    const el = viewerOuterRef.current;
+    if (!el) return;
+    const update = () => {
+      const w = el.clientWidth;
+      const h = el.clientHeight;
+      setViewerSize((prev) => (prev.w === w && prev.h === h ? prev : { w, h }));
+    };
+    update();
+    let ro;
+    if (typeof ResizeObserver !== 'undefined') { ro = new ResizeObserver(update); ro.observe(el); }
+    window.addEventListener('resize', update);
+    return () => { if (ro) ro.disconnect(); window.removeEventListener('resize', update); };
+  }, [loading, loadFailed, result]);
+
+  // Fetch natural page size (independent of render)
+  useEffect(() => {
+    if (loading || !pdfDocRef.current || loadFailed) return;
     let cancelled = false;
     (async () => {
-      setRendering(true);
-      setErrorMsg('');
-      setSpans([]);
-      setSelectedId(null);
       try {
         const page = await pdfDocRef.current.getPage(currentPage);
-        const unscaledVp = page.getViewport({ scale: 1 });
-        setNaturalPageSize({ width: unscaledVp.width, height: unscaledVp.height });
+        const vp = page.getViewport({ scale: 1 });
+        if (cancelled) return;
+        setNaturalPageSize((prev) => {
+          if (Math.abs(prev.width - vp.width) < 0.5 && Math.abs(prev.height - vp.height) < 0.5) {
+            return prev;
+          }
+          return { width: vp.width, height: vp.height };
+        });
+      } catch (err) {
+        console.error('Natural page size fetch failed:', err);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [loading, loadFailed, currentPage, file]);
+
+  // Fit-zoom computation — only when natural size or viewer size changes
+  useEffect(() => {
+    if (loading || loadFailed) return;
+    if (!naturalPageSize.width || !viewerSize.w) return;
+    if (userZoomed) return;
+    const availW = viewerSize.w - 40;
+    const availH = viewerSize.h - 90;
+    if (availW <= 0 || availH <= 0) return;
+    const fitZoom = Math.min(availW / naturalPageSize.width, availH / naturalPageSize.height);
+    const clamped = Math.max(0.2, Math.min(3.0, fitZoom));
+    setZoom((prev) => (prev === null || Math.abs(clamped - prev) > 0.01 ? clamped : prev));
+  }, [naturalPageSize, viewerSize, userZoomed, loading, loadFailed]);
+
+  // Main render — with dedup guard + in-flight guard
+  useEffect(() => {
+    if (loading || !pdfDocRef.current || loadFailed || result) return;
+    if (zoom === null) return;
+
+    const renderKey = `${file?.name || 'f'}|${currentPage}|${zoom.toFixed(4)}`;
+    if (lastRenderKeyRef.current === renderKey && pageDataUrl) {
+      return;
+    }
+    if (renderInFlightRef.current) {
+      return;
+    }
+    lastRenderKeyRef.current = renderKey;
+    renderInFlightRef.current = true;
+
+    let cancelled = false;
+    let renderTask = null;
+
+    setRendering(true);
+    setErrorMsg('');
+    setSpans([]);
+    setSelectedId(null);
+
+    (async () => {
+      try {
+        const page = await pdfDocRef.current.getPage(currentPage);
+        if (cancelled) return;
 
         const vp = page.getViewport({ scale: zoom });
         setViewportTransform(vp.transform);
@@ -848,13 +957,18 @@ export default function EditPdfStudio({ tool, file, onBack }) {
         const ctx = canvas.getContext('2d', { willReadFrequently: true });
         ctx.fillStyle = '#FFFFFF';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
-        await page.render({ canvasContext: ctx, viewport: vp }).promise;
+
+        renderTask = page.render({ canvasContext: ctx, viewport: vp });
+        await renderTask.promise;
+        renderTask = null;
         if (cancelled) return;
 
         setPageDataUrl(canvas.toDataURL('image/jpeg', 0.92));
         setPageDims({ width: vp.width, height: vp.height });
 
         const tc = await page.getTextContent();
+        if (cancelled) return;
+
         const styles = tc.styles || {};
         const items = tc.items || [];
 
@@ -910,19 +1024,34 @@ export default function EditPdfStudio({ tool, file, onBack }) {
         if (cancelled) return;
         setSpans(extracted);
       } catch (err) {
-        if (!cancelled) {
+        if (err && err.name === 'RenderingCancelledException') {
+          // superseded — reset dedup so a fresh render can run
+          lastRenderKeyRef.current = '';
+        } else if (!cancelled) {
           console.error('Render error:', err);
           setErrorMsg('Failed to render page. The file may be corrupted.');
+          lastRenderKeyRef.current = ''; // allow retry
         }
       } finally {
+        renderInFlightRef.current = false;
         if (!cancelled) setRendering(false);
       }
     })();
-    return () => { cancelled = true; };
+
+    return () => {
+      cancelled = true;
+      renderInFlightRef.current = false;
+      if (renderTask) {
+        try { renderTask.cancel(); } catch { /* ignore */ }
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading, loadFailed, currentPage, zoom, result]);
 
+  // Toolbar position — text span
   useEffect(() => {
     if (!selectedId) { setToolbarPos({ x: -9999, y: -9999 }); return; }
+    if (zoom === null) return;
     const span = spans.find((s) => s.id === selectedId);
     if (!span || !pageContainerRef.current) return;
     const update = () => {
@@ -949,9 +1078,11 @@ export default function EditPdfStudio({ tool, file, onBack }) {
     };
   }, [selectedId, spans, activeStyle, zoom]);
 
+  // Toolbar position — addition
   const [additionToolbarPos, setAdditionToolbarPos] = useState({ x: -9999, y: -9999 });
   useEffect(() => {
     if (!selectedAdditionId) { setAdditionToolbarPos({ x: -9999, y: -9999 }); return; }
+    if (zoom === null) return;
     const add = additions.find((a) => a.id === selectedAdditionId);
     if (!add || !pageContainerRef.current) return;
     if (add.type === 'text') { setAdditionToolbarPos({ x: -9999, y: -9999 }); return; }
@@ -959,14 +1090,26 @@ export default function EditPdfStudio({ tool, file, onBack }) {
       const el = pageContainerRef.current;
       if (!el) return;
       const rect = el.getBoundingClientRect();
-      const [cx0, cy0] = pdfXYToCanvas(add.bbox.x0, add.bbox.y0, viewportTransform, pageView);
-      const [cx1, cy1] = pdfXYToCanvas(add.bbox.x1, add.bbox.y1, viewportTransform, pageView);
-      const leftPx = rect.left + Math.min(cx0, cx1);
-      const topPx = rect.top + Math.min(cy0, cy1);
-      const tbW = 400, tbH = 40;
+      let leftPx = 0, topPx = 0;
+      if (add.type === 'freehand' && Array.isArray(add.points) && add.points.length > 0) {
+        let minX = Infinity, minY = Infinity;
+        for (const pt of add.points) {
+          const [cx, cy] = pdfXYToCanvas(pt.x, pt.y, viewportTransform, pageView);
+          if (cx < minX) minX = cx;
+          if (cy < minY) minY = cy;
+        }
+        leftPx = rect.left + minX;
+        topPx = rect.top + minY;
+      } else {
+        const [cx0, cy0] = pdfXYToCanvas(add.bbox.x0, add.bbox.y0, viewportTransform, pageView);
+        const [cx1, cy1] = pdfXYToCanvas(add.bbox.x1, add.bbox.y1, viewportTransform, pageView);
+        leftPx = rect.left + Math.min(cx0, cx1);
+        topPx = rect.top + Math.min(cy0, cy1);
+      }
+      const tbW = 520, tbH = 40;
       let left = Math.max(8, Math.min(window.innerWidth - tbW - 8, leftPx - 12));
       let top = topPx - tbH - 10;
-      if (top < 8) top = rect.top + Math.max(cy0, cy1) + 8;
+      if (top < 8) top = rect.top + topPx + 8;
       if (top + tbH > window.innerHeight - 8) top = window.innerHeight - tbH - 8;
       setAdditionToolbarPos({ x: left, y: top });
     };
@@ -977,7 +1120,7 @@ export default function EditPdfStudio({ tool, file, onBack }) {
       window.removeEventListener('scroll', update, true);
       window.removeEventListener('resize', update);
     };
-  }, [selectedAdditionId, additions, viewportTransform, pageView]);
+  }, [selectedAdditionId, additions, viewportTransform, pageView, zoom]);
 
   const beginEdit = (span) => {
     if (selectedId && selectedId !== span.id) commitEdit();
@@ -1016,20 +1159,13 @@ export default function EditPdfStudio({ tool, file, onBack }) {
         fontSize: span.pdfFontSize,
         bold: span.isBold,
         italic: span.isItalic,
-        underline: false,
-        strike: false,
-        superscript: false,
-        subscript: false,
+        underline: false, strike: false,
+        superscript: false, subscript: false,
         color: span.color,
         align: 'left',
-        lineSpacing: null,
-        charSpacing: null,
-        hScale: null,
-        outlineColor: null,
-        outlineWidth: 0,
-        direction: 'auto',
-        offsetX: 0,
-        offsetY: 0,
+        lineSpacing: null, charSpacing: null, hScale: null,
+        outlineColor: null, outlineWidth: 0,
+        direction: 'auto', offsetX: 0, offsetY: 0,
       });
     }
   };
@@ -1104,9 +1240,7 @@ export default function EditPdfStudio({ tool, file, onBack }) {
         superscript: false, subscript: false,
         charSpacing: 0, lineSpacing: 1.15, hScale: 100,
         outlineColor: null, outlineWidth: 0, direction: 'auto',
-        originalFontName: span.fontRaw,
-        preserveOriginalFont: false,
-        familyExplicit: false,
+        originalFontName: span.fontRaw, preserveOriginalFont: false, familyExplicit: false,
         overrideFontFamily: null, overrideFontSize: null,
         overrideBold: null, overrideItalic: null,
         overrideUnderline: false, overrideStrike: false,
@@ -1122,7 +1256,6 @@ export default function EditPdfStudio({ tool, file, onBack }) {
   const handleStyleChange = (newStyle) => {
     setActiveStyle(newStyle);
     const s = stateRef.current;
-
     if (s.selectedAdditionId) {
       const add = s.additions.find((a) => a.id === s.selectedAdditionId);
       if (add && add.type === 'text') {
@@ -1147,7 +1280,6 @@ export default function EditPdfStudio({ tool, file, onBack }) {
       }
       return;
     }
-
     if (s.selectedId) {
       const span = s.spans.find((x) => x.id === s.selectedId);
       if (!span) return;
@@ -1219,6 +1351,64 @@ export default function EditPdfStudio({ tool, file, onBack }) {
     setActiveStyle(emptyActiveStyle());
   };
 
+  const createHighlightAddition = (x0, y0, x1, y1) => {
+    const [pdfX0, pdfY0] = canvasXYToPdf(x0, y0, viewportTransform, pageView);
+    const [pdfX1, pdfY1] = canvasXYToPdf(x1, y1, viewportTransform, pageView);
+    const id = `add-highlight-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const newAdd = {
+      id, page: currentPage, type: 'highlight',
+      bbox: {
+        x0: Math.min(pdfX0, pdfX1), y0: Math.min(pdfY0, pdfY1),
+        x1: Math.max(pdfX0, pdfX1), y1: Math.max(pdfY0, pdfY1),
+      },
+      color: [...highlightColor],
+      opacity: highlightOpacity,
+    };
+    setAdditions((prev) => [...prev, newAdd]);
+    setSelectedAdditionId(id);
+    setToolMode(null);
+    setActiveStyle(emptyActiveStyle());
+  };
+
+  const createImageAddition = (x0, y0, x1, y1, img) => {
+    const [pdfX0, pdfY0] = canvasXYToPdf(x0, y0, viewportTransform, pageView);
+    const [pdfX1, pdfY1] = canvasXYToPdf(x1, y1, viewportTransform, pageView);
+    const id = `add-image-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const newAdd = {
+      id, page: currentPage, type: 'image',
+      bbox: {
+        x0: Math.min(pdfX0, pdfX1), y0: Math.min(pdfY0, pdfY1),
+        x1: Math.max(pdfX0, pdfX1), y1: Math.max(pdfY0, pdfY1),
+      },
+      dataUrl: img.dataUrl,
+      fileName: img.file?.name || 'image',
+    };
+    setAdditions((prev) => [...prev, newAdd]);
+    setSelectedAdditionId(id);
+    setToolMode(null);
+    setActiveStyle(emptyActiveStyle());
+  };
+
+  const createFreehandAddition = (canvasPoints) => {
+    if (!canvasPoints || canvasPoints.length < 2) return;
+    const pdfPoints = canvasPoints.map(({ x, y }) => {
+      const [px, py] = canvasXYToPdf(x, y, viewportTransform, pageView);
+      return { x: px, y: py };
+    });
+    const id = `add-free-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const newAdd = {
+      id, page: currentPage, type: 'freehand',
+      points: pdfPoints,
+      color: [...freehandColor],
+      strokeWidth: freehandWidth,
+      opacity: 1,
+    };
+    setAdditions((prev) => [...prev, newAdd]);
+    setSelectedAdditionId(id);
+    setToolMode(null);
+    setActiveStyle(emptyActiveStyle());
+  };
+
   const handlePageMouseDown = (e) => {
     if (!toolMode || !pageContainerRef.current) return;
     if (e.target.closest('[data-in-edit-toolbar]')) return;
@@ -1231,18 +1421,113 @@ export default function EditPdfStudio({ tool, file, onBack }) {
 
     if (toolMode === 'text') { createTextAddition(cx, cy); return; }
 
+    if (toolMode === 'image' && pendingImage) {
+      const startState = { startX: cx, startY: cy, currentX: cx, currentY: cy };
+      drawingRectRef.current = startState;
+      setDrawingRect(startState);
+      const onMove = (me) => {
+        if (!drawingRectRef.current) return;
+        const r = pageContainerRef.current?.getBoundingClientRect();
+        if (!r) return;
+        const next = { ...drawingRectRef.current, currentX: me.clientX - r.left, currentY: me.clientY - r.top };
+        drawingRectRef.current = next;
+        setDrawingRect(next);
+      };
+      const onUp = () => {
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', onUp);
+        const finalRect = drawingRectRef.current;
+        drawingRectRef.current = null;
+        setDrawingRect(null);
+        if (!finalRect) return;
+        const x0 = Math.min(finalRect.startX, finalRect.currentX);
+        const y0 = Math.min(finalRect.startY, finalRect.currentY);
+        const x1 = Math.max(finalRect.startX, finalRect.currentX);
+        const y1 = Math.max(finalRect.startY, finalRect.currentY);
+        if (Math.abs(x1 - x0) > 8 && Math.abs(y1 - y0) > 8) {
+          createImageAddition(x0, y0, x1, y1, pendingImage);
+          setPendingImage(null);
+        }
+      };
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+      return;
+    }
+
+    if (toolMode === 'highlight') {
+      const startState = { startX: cx, startY: cy, currentX: cx, currentY: cy };
+      drawingRectRef.current = startState;
+      setDrawingRect(startState);
+      const onMove = (me) => {
+        if (!drawingRectRef.current) return;
+        const r = pageContainerRef.current?.getBoundingClientRect();
+        if (!r) return;
+        const next = { ...drawingRectRef.current, currentX: me.clientX - r.left, currentY: me.clientY - r.top };
+        drawingRectRef.current = next;
+        setDrawingRect(next);
+      };
+      const onUp = () => {
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', onUp);
+        const finalRect = drawingRectRef.current;
+        drawingRectRef.current = null;
+        setDrawingRect(null);
+        if (!finalRect) return;
+        const x0 = Math.min(finalRect.startX, finalRect.currentX);
+        const y0 = Math.min(finalRect.startY, finalRect.currentY);
+        const x1 = Math.max(finalRect.startX, finalRect.currentX);
+        const y1 = Math.max(finalRect.startY, finalRect.currentY);
+        if (Math.abs(x1 - x0) > 3 && Math.abs(y1 - y0) > 3) {
+          createHighlightAddition(x0, y0, x1, y1);
+        }
+      };
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+      return;
+    }
+
+    if (toolMode === 'draw') {
+      const startPoint = { x: cx, y: cy };
+      freehandPathRef.current = [startPoint];
+      freehandActiveRef.current = true;
+      setFreehandPoints([startPoint]);
+
+      const onMove = (me) => {
+        if (!freehandActiveRef.current) return;
+        const r = pageContainerRef.current?.getBoundingClientRect();
+        if (!r) return;
+        const next = { x: me.clientX - r.left, y: me.clientY - r.top };
+        const path = freehandPathRef.current;
+        const last = path[path.length - 1];
+        if (last && (Math.abs(next.x - last.x) < 1.2 && Math.abs(next.y - last.y) < 1.2)) return;
+        path.push(next);
+        setFreehandPoints([...path]);
+      };
+      const onUp = () => {
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', onUp);
+        freehandActiveRef.current = false;
+        const path = freehandPathRef.current;
+        freehandPathRef.current = null;
+        setFreehandPoints(null);
+        if (path && path.length >= 3) {
+          createFreehandAddition(path);
+        }
+      };
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+      return;
+    }
+
     const capturedToolMode = toolMode;
     const startState = { startX: cx, startY: cy, currentX: cx, currentY: cy };
     drawingRectRef.current = startState;
     setDrawingRect(startState);
-
     const onMove = (me) => {
       if (!drawingRectRef.current) return;
       const r = pageContainerRef.current?.getBoundingClientRect();
       if (!r) return;
-      const mx = me.clientX - r.left;
-      const my = me.clientY - r.top;
-      const next = { ...drawingRectRef.current, currentX: mx, currentY: my };
+      const next = { ...drawingRectRef.current, currentX: me.clientX - r.left, currentY: me.clientY - r.top };
       drawingRectRef.current = next;
       setDrawingRect(next);
     };
@@ -1275,41 +1560,128 @@ export default function EditPdfStudio({ tool, file, onBack }) {
     if (editingAdditionId === id) setEditingAdditionId(null);
   };
 
+  const handleReplaceImage = () => {
+    const add = additions.find((a) => a.id === selectedAdditionId);
+    if (!add || add.type !== 'image') return;
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/png,image/jpeg,image/gif,image/webp';
+    input.onchange = async (e) => {
+      const f = e.target.files?.[0];
+      if (!f) return;
+      const dataUrl = await new Promise((res, rej) => {
+        const reader = new FileReader();
+        reader.onload = () => res(reader.result);
+        reader.onerror = rej;
+        reader.readAsDataURL(f);
+      });
+      updateAddition(add.id, { dataUrl, fileName: f.name });
+    };
+    input.click();
+  };
+
   const handleAdditionDragStart = (e, additionId, mode, handle = null) => {
     e.preventDefault();
     e.stopPropagation();
     const add = additions.find((a) => a.id === additionId);
     if (!add) return;
 
+    if (add.type === 'freehand') {
+      const initialPoints = add.points.map((p) => ({ ...p }));
+
+      let pminX = Infinity, pminY = Infinity, pmaxX = -Infinity, pmaxY = -Infinity;
+      for (const p of initialPoints) {
+        if (p.x < pminX) pminX = p.x;
+        if (p.y < pminY) pminY = p.y;
+        if (p.x > pmaxX) pmaxX = p.x;
+        if (p.y > pmaxY) pmaxY = p.y;
+      }
+
+      const startClientX = e.clientX;
+      const startClientY = e.clientY;
+
+      const onMove = (me) => {
+        const dxPx = me.clientX - startClientX;
+        const dyPx = me.clientY - startClientY;
+
+        if (mode === 'move') {
+          const dxPdf = dxPx / zoom;
+          const dyPdf = dyPx / zoom;
+          updateAddition(add.id, {
+            points: initialPoints.map((p) => ({ x: p.x + dxPdf, y: p.y + dyPdf })),
+          });
+          return;
+        }
+
+        const dxPdf = dxPx / zoom;
+        const dyPdf = dyPx / zoom;
+
+        let newPminX = pminX;
+        let newPmaxX = pmaxX;
+        let newPminY = pminY;
+        let newPmaxY = pmaxY;
+
+        if (handle.includes('w')) newPminX = pminX + dxPdf;
+        if (handle.includes('e')) newPmaxX = pmaxX + dxPdf;
+        if (handle.includes('n')) newPminY = pminY + dyPdf;
+        if (handle.includes('s')) newPmaxY = pmaxY + dyPdf;
+
+        if (newPmaxX - newPminX < 4) {
+          if (handle.includes('w')) newPminX = newPmaxX - 4;
+          else if (handle.includes('e')) newPmaxX = newPminX + 4;
+        }
+        if (newPmaxY - newPminY < 4) {
+          if (handle.includes('n')) newPminY = newPmaxY - 4;
+          else if (handle.includes('s')) newPmaxY = newPminY + 4;
+        }
+
+        const pw0 = Math.max(pmaxX - pminX, 0.01);
+        const ph0 = Math.max(pmaxY - pminY, 0.01);
+        const pw1 = newPmaxX - newPminX;
+        const ph1 = newPmaxY - newPminY;
+        const psx = pw1 / pw0;
+        const psy = ph1 / ph0;
+
+        const newPoints = initialPoints.map((p) => ({
+          x: newPminX + (p.x - pminX) * psx,
+          y: newPminY + (p.y - pminY) * psy,
+        }));
+        updateAddition(add.id, { points: newPoints });
+      };
+      const onUp = () => {
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+      };
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+      return;
+    }
+
     additionDragRef.current = {
       active: true, additionId, mode, handle,
       startX: e.clientX, startY: e.clientY,
       initialBox: { ...add.bbox },
     };
-
     const onMove = (me) => {
-      const ref = additionDragRef.current;
-      if (!ref.active) return;
-      const dxPx = me.clientX - ref.startX;
-      const dyPx = me.clientY - ref.startY;
-      const dxPdf = dxPx / zoom;
-      const dyPdf = dyPx / zoom;
-      const b = { ...ref.initialBox };
-
+      const r = additionDragRef.current;
+      if (!r.active) return;
+      const dxPdf = (me.clientX - r.startX) / zoom;
+      const dyPdf = (me.clientY - r.startY) / zoom;
+      const b = { ...r.initialBox };
       if (mode === 'move') {
-        b.x0 = ref.initialBox.x0 + dxPdf;
-        b.y0 = ref.initialBox.y0 + dyPdf;
-        b.x1 = ref.initialBox.x1 + dxPdf;
-        b.y1 = ref.initialBox.y1 + dyPdf;
+        b.x0 = r.initialBox.x0 + dxPdf;
+        b.y0 = r.initialBox.y0 + dyPdf;
+        b.x1 = r.initialBox.x1 + dxPdf;
+        b.y1 = r.initialBox.y1 + dyPdf;
       } else if (mode === 'resize') {
-        if (handle.includes('w')) b.x0 = ref.initialBox.x0 + dxPdf;
-        if (handle.includes('e')) b.x1 = ref.initialBox.x1 + dxPdf;
-        if (handle.includes('n')) b.y0 = ref.initialBox.y0 + dyPdf;
-        if (handle.includes('s')) b.y1 = ref.initialBox.y1 + dyPdf;
+        if (handle.includes('w')) b.x0 = r.initialBox.x0 + dxPdf;
+        if (handle.includes('e')) b.x1 = r.initialBox.x1 + dxPdf;
+        if (handle.includes('n')) b.y0 = r.initialBox.y0 + dyPdf;
+        if (handle.includes('s')) b.y1 = r.initialBox.y1 + dyPdf;
         if (b.x0 > b.x1) [b.x0, b.x1] = [b.x1, b.x0];
         if (b.y0 > b.y1) [b.y0, b.y1] = [b.y1, b.y0];
       }
-      updateAddition(ref.additionId, { bbox: b });
+      updateAddition(r.additionId, { bbox: b });
     };
     const onUp = () => {
       additionDragRef.current.active = false;
@@ -1320,20 +1692,38 @@ export default function EditPdfStudio({ tool, file, onBack }) {
     window.addEventListener('pointerup', onUp);
   };
 
+  // Outside-click
   useEffect(() => {
     const onDocMouseDown = (e) => {
       if (stateRef.current.selectedId) {
-        if (!e.target.closest('[data-in-edit-toolbar]') && !e.target.closest('[data-in-edit-box]') && !e.target.closest('[data-format-sidebar]')) {
+        if (
+          !e.target.closest('[data-in-edit-toolbar]') &&
+          !e.target.closest('[data-in-edit-box]') &&
+          !e.target.closest('[data-format-sidebar]')
+        ) {
           commitEdit();
         }
       }
       if (stateRef.current.editingAdditionId) {
-        if (!e.target.closest('[data-in-edit-toolbar]') && !e.target.closest('[data-addition-node]') && !e.target.closest('[data-format-sidebar]')) {
+        if (
+          !e.target.closest('[data-in-edit-toolbar]') &&
+          !e.target.closest('[data-addition-node]') &&
+          !e.target.closest('[data-format-sidebar]')
+        ) {
           const addId = stateRef.current.editingAdditionId;
           const draft = stateRef.current.additionDraftText ?? '';
           setAdditions((prev) => prev.map((a) => (a.id === addId ? { ...a, text: draft } : a)));
           setEditingAdditionId(null);
         }
+      }
+      if (
+        stateRef.current.selectedAdditionId &&
+        !stateRef.current.editingAdditionId &&
+        !e.target.closest('[data-in-edit-toolbar]') &&
+        !e.target.closest('[data-addition-node]') &&
+        !e.target.closest('[data-format-sidebar]')
+      ) {
+        setSelectedAdditionId(null);
       }
     };
     document.addEventListener('mousedown', onDocMouseDown, true);
@@ -1380,9 +1770,30 @@ export default function EditPdfStudio({ tool, file, onBack }) {
       return next;
     });
   };
-  const handleZoomIn = () => { setUserZoomed(true); setZoom((z) => Math.min(3.0, +(z + 0.2).toFixed(2))); };
-  const handleZoomOut = () => { setUserZoomed(true); setZoom((z) => Math.max(0.2, +(z - 0.2).toFixed(2))); };
-  const handleFitToScreen = () => setUserZoomed(false);
+
+  const handleZoomIn = () => {
+    setUserZoomed(true);
+    setZoom((z) => {
+      const cur = z === null ? 1.0 : z;
+      return Math.min(3.0, +(cur + 0.2).toFixed(2));
+    });
+  };
+  const handleZoomOut = () => {
+    setUserZoomed(true);
+    setZoom((z) => {
+      const cur = z === null ? 1.0 : z;
+      return Math.max(0.2, +(cur - 0.2).toFixed(2));
+    });
+  };
+  const handleFitToScreen = () => {
+    setUserZoomed(false);
+    if (!naturalPageSize.width || !viewerSize.w) return;
+    const availW = viewerSize.w - 40;
+    const availH = viewerSize.h - 90;
+    if (availW <= 0 || availH <= 0) return;
+    const fitZoom = Math.min(availW / naturalPageSize.width, availH / naturalPageSize.height);
+    setZoom(Math.max(0.2, Math.min(3.0, fitZoom)));
+  };
 
   const handleSave = async () => {
     if (stateRef.current.selectedId) {
@@ -1407,30 +1818,19 @@ export default function EditPdfStudio({ tool, file, onBack }) {
     setErrorMsg('');
     try {
       const editPayload = Object.values(finalEdits).map((e) => ({
-        page: e.page,
-        bbox: e.bbox,
-        offsetX: e.offsetX || 0,
-        offsetY: e.offsetY || 0,
-        originalText: e.originalText,
-        newText: e.newText,
-        fontName: e.fontName,
-        originalFontName: e.originalFontName || null,
+        page: e.page, bbox: e.bbox,
+        offsetX: e.offsetX || 0, offsetY: e.offsetY || 0,
+        originalText: e.originalText, newText: e.newText,
+        fontName: e.fontName, originalFontName: e.originalFontName || null,
         preserveOriginalFont: Boolean(e.preserveOriginalFont),
         familyExplicit: Boolean(e.familyExplicit),
-        bold: Boolean(e.bold),
-        italic: Boolean(e.italic),
-        fontSize: e.fontSize,
-        color: e.color,
-        align: e.align,
-        underline: Boolean(e.underline),
-        strike: Boolean(e.strike),
-        superscript: Boolean(e.superscript),
-        subscript: Boolean(e.subscript),
-        charSpacing: e.charSpacing || 0,
-        lineSpacing: e.lineSpacing || 1.15,
+        bold: Boolean(e.bold), italic: Boolean(e.italic),
+        fontSize: e.fontSize, color: e.color, align: e.align,
+        underline: Boolean(e.underline), strike: Boolean(e.strike),
+        superscript: Boolean(e.superscript), subscript: Boolean(e.subscript),
+        charSpacing: e.charSpacing || 0, lineSpacing: e.lineSpacing || 1.15,
         hScale: e.hScale || 100,
-        outlineColor: e.outlineColor || null,
-        outlineWidth: e.outlineWidth || 0,
+        outlineColor: e.outlineColor || null, outlineWidth: e.outlineWidth || 0,
         direction: e.direction || 'auto',
       }));
       const addPayload = finalAdditions.map((a) => ({ ...a }));
@@ -1451,6 +1851,7 @@ export default function EditPdfStudio({ tool, file, onBack }) {
   const handleContinueEditing = () => {
     if (result?.url) URL.revokeObjectURL(result.url);
     setResult(null);
+    lastRenderKeyRef.current = '';
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
   const handleBack = () => {
@@ -1467,12 +1868,8 @@ export default function EditPdfStudio({ tool, file, onBack }) {
     selectedSpan ? (selectedSpan.text || '').slice(0, 30)
     : selectedAddition?.type === 'text' ? (selectedAddition.text || 'New text').slice(0, 30)
     : null;
-  const hasTextSelection =
-    Boolean(selectedId) || (selectedAddition?.type === 'text');
+  const hasTextSelection = Boolean(selectedId) || (selectedAddition?.type === 'text');
 
-  // =========================================================================
-  // SUCCESS SCREEN
-  // =========================================================================
   if (result) {
     return (
       <div className="bg-slate-50 min-h-screen flex flex-col">
@@ -1522,9 +1919,6 @@ export default function EditPdfStudio({ tool, file, onBack }) {
     );
   }
 
-  // =========================================================================
-  // EDITOR — fits viewport, no page scrollbar
-  // =========================================================================
   return (
     <div className="bg-slate-50 h-screen flex flex-col overflow-hidden">
       <header className="shrink-0 bg-white/90 backdrop-blur-md border-b border-slate-200 z-30">
@@ -1563,16 +1957,26 @@ export default function EditPdfStudio({ tool, file, onBack }) {
           </div>
         )}
 
+        {!loading && !loadFailed && (
+          <div className="shrink-0 bg-white border border-slate-200 rounded-2xl shadow-sm px-3 py-2 flex items-center justify-start">
+            <ToolsBar
+              toolMode={toolMode}
+              setToolMode={setToolMode}
+              onImageReady={(img) => { setPendingImage(img); setToolMode('image'); }}
+              hasPendingImage={Boolean(pendingImage)}
+              onCancelImage={() => setPendingImage(null)}
+            />
+          </div>
+        )}
+
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 flex-1 min-h-0">
-          {/* Viewer */}
           <div ref={viewerOuterRef}
             className="lg:col-span-9 bg-slate-200/60 rounded-3xl border border-slate-200 p-2 sm:p-3 flex flex-col items-center justify-center relative overflow-hidden min-h-0 h-full">
-            {pageDataUrl && !rendering && !loading && <ToolsBar toolMode={toolMode} setToolMode={setToolMode} />}
 
-            {loading || rendering ? (
+            {loading ? (
               <div className="flex flex-col items-center justify-center py-32 space-y-3 text-slate-500">
                 <Loader2 className="w-9 h-9 animate-spin text-rose-500" />
-                <p className="text-xs font-semibold">{loading ? 'Loading document…' : 'Rendering page…'}</p>
+                <p className="text-xs font-semibold">Loading document…</p>
               </div>
             ) : loadFailed ? (
               <div className="flex flex-col items-center justify-center py-32 space-y-3 text-slate-500">
@@ -1600,7 +2004,15 @@ export default function EditPdfStudio({ tool, file, onBack }) {
                     }}
                   />
 
-                  {/* Existing-span overlay */}
+                  {rendering && (
+                    <div className="absolute inset-0 bg-white/60 flex items-center justify-center z-[200] pointer-events-none">
+                      <div className="flex flex-col items-center gap-2">
+                        <Loader2 className="w-8 h-8 animate-spin text-rose-500" />
+                        <p className="text-[11px] font-semibold text-slate-700">Rendering…</p>
+                      </div>
+                    </div>
+                  )}
+
                   <div style={{
                     position: 'absolute', top: 0, left: 0,
                     width: `${pageDims.width}px`, height: `${pageDims.height}px`,
@@ -1646,9 +2058,7 @@ export default function EditPdfStudio({ tool, file, onBack }) {
 
                       const effAlign = eff.align || 'left';
                       const useWideBox = effAlign === 'center' || effAlign === 'right' || effAlign === 'justify';
-
                       const boxLeft = useWideBox ? 4 : (span.canvasX + offsetPx.x);
-
                       const displayText = isModified ? edit.newText : span.text;
 
                       const hScaleRatio = (eff.hScale ?? 100) / 100;
@@ -1677,8 +2087,6 @@ export default function EditPdfStudio({ tool, file, onBack }) {
                             : undefined,
                       };
 
-                      // ---------- EDITING ----------
-                                            // ---------- EDITING ----------
                       if (isSelected) {
                         return (
                           <React.Fragment key={span.id}>
@@ -1709,23 +2117,18 @@ export default function EditPdfStudio({ tool, file, onBack }) {
                         );
                       }
 
-                      // ---------- MODIFIED ----------
                       if (isModified) {
                         if (edit.newText === '') {
                           return (
                             <React.Fragment key={span.id}>
                               {coverNode}
                               <div
-                                className="absolute z-30 cursor-text group"
+                                className="cursor-text group"
                                 style={{
                                   ...commonFontStyle,
-                                  position: 'absolute',
-                                  left: `${boxLeft}px`,
-                                  top: `${top}px`,
-                                  minWidth: '12px',
-                                  minHeight: `${lineHeightPx}px`,
-                                  display: 'inline-block',
-                                  zIndex: 30,
+                                  position: 'absolute', left: `${boxLeft}px`, top: `${top}px`,
+                                  minWidth: '12px', minHeight: `${lineHeightPx}px`,
+                                  display: 'inline-block', zIndex: 30,
                                 }}
                                 onClick={() => beginEdit(span)}
                                 title="Deleted — click to edit"
@@ -1739,32 +2142,24 @@ export default function EditPdfStudio({ tool, file, onBack }) {
                           <React.Fragment key={span.id}>
                             {coverNode}
                             <div
-                              className="absolute z-30 cursor-text group"
+                              className="cursor-text group"
                               style={{
                                 ...commonFontStyle,
-                                position: 'absolute',
-                                left: `${boxLeft}px`,
-                                top: `${top}px`,
+                                position: 'absolute', left: `${boxLeft}px`, top: `${top}px`,
                                 minWidth: useWideBox ? `${pageDims.width - 8}px` : '12px',
                                 width: useWideBox ? `${pageDims.width - 8}px` : 'auto',
                                 minHeight: `${lineHeightPx}px`,
-                                display: 'inline-block',
-                                zIndex: 30,
+                                display: 'inline-block', zIndex: 30,
                               }}
                               onClick={() => beginEdit(span)}
                               title="Click to edit"
                             >
                               <span className="relative block">{String(displayText ?? '') || '\u00A0'}</span>
-                              {!useWideBox && (
-                                <span className="absolute -top-1.5 -right-1.5 hidden group-hover:flex items-center justify-center w-4 h-4 bg-blue-600 text-white rounded-full text-[10px] font-bold">✎</span>
-                              )}
                             </div>
                           </React.Fragment>
                         );
                       }
 
-                      // ---------- UNMODIFIED (click target) ----------
-                      // Invisible inline-block sized to the exact text width
                       const unmodLineHeight = span.fontPx * 1.15;
                       const unmodBaseFromTop = getBaselineFromTop(span.cssFont, span.fontPx, unmodLineHeight);
                       const unmodTop = span.canvasYBaseline - unmodBaseFromTop;
@@ -1774,20 +2169,14 @@ export default function EditPdfStudio({ tool, file, onBack }) {
                           key={span.id}
                           className="absolute z-10 cursor-text hover:bg-blue-500/15 rounded-[2px] transition-colors"
                           style={{
-                            position: 'absolute',
-                            left: `${span.canvasX}px`,
-                            top: `${unmodTop}px`,
-                            minWidth: '12px',
-                            display: 'inline-block',
-                            fontFamily: span.cssFont,
-                            fontSize: `${span.fontPx}px`,
+                            position: 'absolute', left: `${span.canvasX}px`, top: `${unmodTop}px`,
+                            minWidth: '12px', display: 'inline-block',
+                            fontFamily: span.cssFont, fontSize: `${span.fontPx}px`,
                             fontWeight: span.isBold ? 'bold' : 'normal',
                             fontStyle: span.isItalic ? 'italic' : 'normal',
                             lineHeight: `${unmodLineHeight}px`,
-                            whiteSpace: 'pre',
-                            color: 'transparent',
-                            padding: 0, margin: 0,
-                            boxSizing: 'border-box',
+                            whiteSpace: 'pre', color: 'transparent',
+                            padding: 0, margin: 0, boxSizing: 'border-box',
                             userSelect: 'none',
                           }}
                           onClick={() => beginEdit(span)}
@@ -1799,55 +2188,40 @@ export default function EditPdfStudio({ tool, file, onBack }) {
                     })}
                   </div>
 
-                  {/* Additions overlay */}
                   <div style={{
                     position: 'absolute', top: 0, left: 0,
                     width: `${pageDims.width}px`, height: `${pageDims.height}px`,
                     pointerEvents: 'none',
                   }}>
                     {additions.filter((a) => a.page === currentPage).map((add) => {
-                      const [cx0, cy0] = pdfXYToCanvas(add.bbox.x0, add.bbox.y0, viewportTransform, pageView);
-                      const [cx1, cy1] = pdfXYToCanvas(add.bbox.x1, add.bbox.y1, viewportTransform, pageView);
-                      const left = Math.min(cx0, cx1);
-                      const top = Math.min(cy0, cy1);
-                      const width = Math.max(1, Math.abs(cx1 - cx0));
-                      const height = Math.max(1, Math.abs(cy1 - cy0));
                       const isSel = selectedAdditionId === add.id;
                       const isEditing = editingAdditionId === add.id;
 
                       if (add.type === 'text') {
+                        const [tx, tyBase] = pdfXYToCanvas(add.bbox.x0, add.bbox.y1, viewportTransform, pageView);
                         const fontPx = (add.fontSize || 14) * zoom;
-                        const lineHeightMult = add.lineSpacing ?? 1.15;
-                        const lineHeightPx = fontPx * lineHeightMult;
+                        const lineHeightPx = fontPx * (add.lineSpacing ?? 1.15);
                         const cssFont = cssStackFromFamily(add.fontName || 'Helvetica');
                         const baseFromTop = getBaselineFromTop(cssFont, fontPx, lineHeightPx);
-                        const [tx, tyBase] = pdfXYToCanvas(add.bbox.x0, add.bbox.y1, viewportTransform, pageView);
                         const textTop = tyBase - baseFromTop;
-
                         const decorations = [];
                         if (add.underline) decorations.push('underline');
                         if (add.strike) decorations.push('line-through');
-
                         const addAlign = add.align || 'left';
-                        const useAddWideBox =
-                          addAlign === 'center' || addAlign === 'right' || addAlign === 'justify';
+                        const useAddWideBox = addAlign === 'center' || addAlign === 'right' || addAlign === 'justify';
                         const addBoxLeft = useAddWideBox ? 4 : tx - 4;
 
                         return (
                           <div key={add.id} data-addition-node="1"
                             style={{
-                              position: 'absolute',
-                              left: `${addBoxLeft}px`,
-                              top: `${textTop - 4}px`,
+                              position: 'absolute', left: `${addBoxLeft}px`, top: `${textTop - 4}px`,
                               minWidth: useAddWideBox ? `${pageDims.width - 8}px` : '40px',
                               width: useAddWideBox ? `${pageDims.width - 8}px` : 'auto',
-                              display: 'inline-block',
-                              minHeight: `${lineHeightPx + 8}px`,
+                              display: 'inline-block', minHeight: `${lineHeightPx + 8}px`,
                               pointerEvents: 'auto',
                               cursor: isEditing ? 'text' : 'move',
                               outline: isSel ? '1.5px solid #3b82f6' : '1px dashed rgba(59,130,246,0.35)',
-                              outlineOffset: '0px',
-                              background: 'rgba(59,130,246,0.04)',
+                              outlineOffset: '0px', background: 'rgba(59,130,246,0.04)',
                               borderRadius: '3px',
                             }}
                             onMouseDown={(e) => {
@@ -1870,12 +2244,9 @@ export default function EditPdfStudio({ tool, file, onBack }) {
                                 onCancel={() => setEditingAdditionId(null)}
                                 onMouseDownInternal={(e) => e.stopPropagation()}
                                 style={{
-                                  position: 'relative',
-                                  display: 'inline-block',
-                                  minWidth: '40px',
-                                  minHeight: `${lineHeightPx}px`,
-                                  padding: '4px',
-                                  margin: 0, border: 'none',
+                                  position: 'relative', display: 'inline-block',
+                                  minWidth: '40px', minHeight: `${lineHeightPx}px`,
+                                  padding: '4px', margin: 0, border: 'none',
                                   outline: 'none', background: 'white',
                                   fontFamily: cssFont, fontSize: `${fontPx}px`,
                                   fontWeight: add.bold ? 'bold' : 'normal',
@@ -1888,20 +2259,16 @@ export default function EditPdfStudio({ tool, file, onBack }) {
                                 }}
                               />
                             ) : (
-                              <span
-                                style={{
-                                  display: 'inline-block',
-                                  padding: '4px',
-                                  fontFamily: cssFont, fontSize: `${fontPx}px`,
-                                  fontWeight: add.bold ? 'bold' : 'normal',
-                                  fontStyle: add.italic ? 'italic' : 'normal',
-                                  textDecoration: decorations.length ? decorations.join(' ') : 'none',
-                                  color: rgbToCss(add.color || [0, 0, 0]),
-                                  textAlign: addAlign,
-                                  lineHeight: `${lineHeightPx}px`,
-                                  whiteSpace: 'pre', pointerEvents: 'none',
-                                }}
-                              >
+                              <span style={{
+                                display: 'inline-block', padding: '4px',
+                                fontFamily: cssFont, fontSize: `${fontPx}px`,
+                                fontWeight: add.bold ? 'bold' : 'normal',
+                                fontStyle: add.italic ? 'italic' : 'normal',
+                                textDecoration: decorations.length ? decorations.join(' ') : 'none',
+                                color: rgbToCss(add.color || [0, 0, 0]),
+                                textAlign: addAlign, lineHeight: `${lineHeightPx}px`,
+                                whiteSpace: 'pre', pointerEvents: 'none',
+                              }}>
                                 {String(add.text || '') || 'Double-click to edit'}
                               </span>
                             )}
@@ -1926,50 +2293,201 @@ export default function EditPdfStudio({ tool, file, onBack }) {
                         );
                       }
 
-                      return (
-                        <div key={add.id} data-addition-node="1"
-                          style={{
-                            position: 'absolute',
-                            left: `${left}px`, top: `${top}px`,
-                            width: `${width}px`, height: `${height}px`,
-                            pointerEvents: 'auto', cursor: 'move',
-                            outline: isSel ? '1.5px solid #3b82f6' : '1px dashed rgba(59,130,246,0.35)',
-                            outlineOffset: '0px',
-                            background: 'transparent',
-                          }}
-                          onMouseDown={(e) => {
-                            e.stopPropagation();
-                            setSelectedAdditionId(add.id);
-                            setSelectedId(null);
-                            setEditingAdditionId(null);
-                            handleAdditionDragStart(e, add.id, 'move');
-                          }}
-                        >
-                          <ShapeRenderer
-                            shapeType={add.shapeType}
-                            strokeColor={add.strokeColor || [0, 0, 0]}
-                            strokeWidth={add.strokeWidth ?? 2}
-                            fillColor={add.fillColor}
-                          />
-                          {isSel && (
-                            <>
-                              {['nw','ne','sw','se'].map((h) => {
-                                const pos = {
-                                  nw: '-top-1.5 -left-1.5 cursor-nwse-resize',
-                                  ne: '-top-1.5 -right-1.5 cursor-nesw-resize',
-                                  sw: '-bottom-1.5 -left-1.5 cursor-nesw-resize',
-                                  se: '-bottom-1.5 -right-1.5 cursor-nwse-resize',
-                                }[h];
-                                return (
-                                  <div key={h}
-                                    onMouseDown={(e) => { e.stopPropagation(); handleAdditionDragStart(e, add.id, 'resize', h); }}
-                                    className={`absolute w-2.5 h-2.5 bg-white border-2 border-blue-600 rounded-sm shadow ${pos}`} />
-                                );
-                              })}
-                            </>
-                          )}
-                        </div>
-                      );
+                      if (add.type === 'highlight' || add.type === 'shape' || add.type === 'image') {
+                        const [cx0, cy0] = pdfXYToCanvas(add.bbox.x0, add.bbox.y0, viewportTransform, pageView);
+                        const [cx1, cy1] = pdfXYToCanvas(add.bbox.x1, add.bbox.y1, viewportTransform, pageView);
+                        const left = Math.min(cx0, cx1);
+                        const top = Math.min(cy0, cy1);
+                        const width = Math.max(1, Math.abs(cx1 - cx0));
+                        const height = Math.max(1, Math.abs(cy1 - cy0));
+
+                        return (
+                          <div key={add.id} data-addition-node="1"
+                            style={{
+                              position: 'absolute',
+                              left: `${left}px`, top: `${top}px`,
+                              width: `${width}px`, height: `${height}px`,
+                              pointerEvents: 'auto',
+                              cursor: 'move',
+                              outline: isSel
+                                ? '1.5px solid #3b82f6'
+                                : (add.type === 'highlight' ? '1px dashed rgba(234,179,8,0.5)' : '1px dashed rgba(59,130,246,0.35)'),
+                              outlineOffset: '0px',
+                              background: 'transparent',
+                            }}
+                            onMouseDown={(e) => {
+                              e.stopPropagation();
+                              setSelectedAdditionId(add.id);
+                              setSelectedId(null);
+                              setEditingAdditionId(null);
+                              handleAdditionDragStart(e, add.id, 'move');
+                            }}
+                          >
+                            {add.type === 'shape' && (
+                              <ShapeRenderer
+                                shapeType={add.shapeType}
+                                strokeColor={add.strokeColor || [0, 0, 0]}
+                                strokeWidth={add.strokeWidth ?? 2}
+                                fillColor={add.fillColor}
+                              />
+                            )}
+                            {add.type === 'highlight' && (
+                              <div
+                                style={{
+                                  position: 'absolute', inset: 0,
+                                  background: rgbToCss(add.color || [1, 0.93, 0.3]),
+                                  opacity: add.opacity ?? 0.4,
+                                  pointerEvents: 'none',
+                                }}
+                              />
+                            )}
+                            {add.type === 'image' && add.dataUrl && (
+                              <img src={add.dataUrl} alt={add.fileName || 'image'}
+                                draggable={false}
+                                style={{
+                                  position: 'absolute', inset: 0,
+                                  width: '100%', height: '100%',
+                                  objectFit: 'fill',
+                                  pointerEvents: 'none',
+                                  userSelect: 'none',
+                                }}
+                              />
+                            )}
+                            {isSel && (
+                              <>
+                                {['nw','ne','sw','se'].map((h) => {
+                                  const pos = {
+                                    nw: '-top-1.5 -left-1.5 cursor-nwse-resize',
+                                    ne: '-top-1.5 -right-1.5 cursor-nesw-resize',
+                                    sw: '-bottom-1.5 -left-1.5 cursor-nesw-resize',
+                                    se: '-bottom-1.5 -right-1.5 cursor-nwse-resize',
+                                  }[h];
+                                  return (
+                                    <div key={h}
+                                      onMouseDown={(e) => { e.stopPropagation(); handleAdditionDragStart(e, add.id, 'resize', h); }}
+                                      className={`absolute w-2.5 h-2.5 bg-white border-2 border-blue-600 rounded-sm shadow ${pos}`} />
+                                  );
+                                })}
+                              </>
+                            )}
+                          </div>
+                        );
+                      }
+
+                      if (add.type === 'freehand' && Array.isArray(add.points) && add.points.length >= 2) {
+                        const canvasPts = add.points.map((pt) => {
+                          const [cx, cy] = pdfXYToCanvas(pt.x, pt.y, viewportTransform, pageView);
+                          return [cx, cy];
+                        });
+                        const d = 'M ' + canvasPts.map(([x, y]) => `${x} ${y}`).join(' L ');
+                        const strokeW = (add.strokeWidth ?? 3) * zoom;
+
+                        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+                        for (const [cx, cy] of canvasPts) {
+                          if (cx < minX) minX = cx;
+                          if (cy < minY) minY = cy;
+                          if (cx > maxX) maxX = cx;
+                          if (cy > maxY) maxY = cy;
+                        }
+                        const bboxW = Math.max(maxX - minX, 8);
+                        const bboxH = Math.max(maxY - minY, 8);
+
+                        return (
+                          <div key={add.id} data-addition-node="1"
+                            style={{
+                              position: 'absolute', top: 0, left: 0,
+                              width: `${pageDims.width}px`, height: `${pageDims.height}px`,
+                              pointerEvents: 'none',
+                            }}
+                          >
+                            <svg
+                              width={pageDims.width}
+                              height={pageDims.height}
+                              style={{ position: 'absolute', top: 0, left: 0, overflow: 'visible' }}
+                            >
+                              <path
+                                d={d}
+                                stroke="transparent"
+                                strokeWidth={Math.max(strokeW + 12, 14)}
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                fill="none"
+                                style={{ pointerEvents: 'stroke', cursor: 'move' }}
+                                onMouseDown={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedAdditionId(add.id);
+                                  setSelectedId(null);
+                                  setEditingAdditionId(null);
+                                  handleAdditionDragStart(e, add.id, 'move');
+                                }}
+                              />
+                              <path
+                                d={d}
+                                stroke={rgbToCss(add.color || [0.86, 0.15, 0.15])}
+                                strokeWidth={strokeW}
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                fill="none"
+                                opacity={add.opacity ?? 1}
+                                style={{ pointerEvents: 'none' }}
+                              />
+                            </svg>
+
+                            {isSel && (
+                              <>
+                                <div
+                                  style={{
+                                    position: 'absolute',
+                                    left: `${minX - 4}px`,
+                                    top: `${minY - 4}px`,
+                                    width: `${bboxW + 8}px`,
+                                    height: `${bboxH + 8}px`,
+                                    border: '1.5px dashed #3b82f6',
+                                    pointerEvents: 'none',
+                                    boxSizing: 'border-box',
+                                  }}
+                                />
+                                {['nw','ne','sw','se'].map((h) => {
+                                  const isW = h.includes('w');
+                                  const isN = h.includes('n');
+                                  const cx = isW ? minX - 8 : maxX;
+                                  const cy = isN ? minY - 8 : maxY;
+                                  const cursor = h === 'nw' || h === 'se' ? 'nwse-resize' : 'nesw-resize';
+                                  return (
+                                    <div
+                                      key={h}
+                                      onMouseDown={(e) => {
+                                        e.stopPropagation();
+                                        handleAdditionDragStart(e, add.id, 'resize', h);
+                                      }}
+                                      onTouchStart={(e) => {
+                                        e.stopPropagation();
+                                        handleAdditionDragStart(e, add.id, 'resize', h);
+                                      }}
+                                      style={{
+                                        position: 'absolute',
+                                        left: `${cx}px`,
+                                        top: `${cy}px`,
+                                        width: '12px',
+                                        height: '12px',
+                                        background: 'white',
+                                        border: '2px solid #2563eb',
+                                        borderRadius: '2px',
+                                        boxShadow: '0 1px 2px rgba(0,0,0,0.15)',
+                                        cursor,
+                                        pointerEvents: 'auto',
+                                        zIndex: 5,
+                                      }}
+                                    />
+                                  );
+                                })}
+                              </>
+                            )}
+                          </div>
+                        );
+                      }
+
+                      return null;
                     })}
 
                     {drawingRect && (
@@ -1980,23 +2498,40 @@ export default function EditPdfStudio({ tool, file, onBack }) {
                           top: `${Math.min(drawingRect.startY, drawingRect.currentY)}px`,
                           width: `${Math.abs(drawingRect.currentX - drawingRect.startX)}px`,
                           height: `${Math.abs(drawingRect.currentY - drawingRect.startY)}px`,
-                          border: '1.5px dashed #3b82f6',
-                          background: 'rgba(59,130,246,0.1)',
+                          border: toolMode === 'highlight' ? '1.5px dashed #eab308' : '1.5px dashed #3b82f6',
+                          background: toolMode === 'highlight' ? 'rgba(250,204,21,0.2)' : 'rgba(59,130,246,0.1)',
                           pointerEvents: 'none',
                         }}
                       />
+                    )}
+
+                    {freehandPoints && freehandPoints.length >= 2 && (
+                      <svg
+                        width={pageDims.width}
+                        height={pageDims.height}
+                        style={{ position: 'absolute', top: 0, left: 0, overflow: 'visible', pointerEvents: 'none' }}
+                      >
+                        <path
+                          d={'M ' + freehandPoints.map((p) => `${p.x} ${p.y}`).join(' L ')}
+                          stroke={rgbToCss(freehandColor)}
+                          strokeWidth={freehandWidth * zoom}
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          fill="none"
+                        />
+                      </svg>
                     )}
                   </div>
                 </div>
               </div>
             ) : (
               <div className="flex flex-col items-center justify-center py-32 space-y-3 text-slate-500">
-                <FileImage className="w-10 h-10 text-slate-400" />
-                <p className="text-xs font-semibold">Nothing to display.</p>
+                <Loader2 className="w-9 h-9 animate-spin text-rose-500" />
+                <p className="text-xs font-semibold">Preparing view…</p>
               </div>
             )}
 
-            {pageDataUrl && !rendering && !loading && (
+            {pageDataUrl && !loading && (
               <div className="absolute bottom-3 left-1/2 -translate-x-1/2 bg-slate-900/90 backdrop-blur-md text-white px-3 py-1.5 rounded-2xl flex items-center space-x-2 text-xs shadow-xl z-40">
                 <button onClick={() => setCurrentPage((p) => Math.max(1, p - 1))} disabled={currentPage <= 1}
                   className="p-1 hover:bg-slate-700 rounded-lg disabled:opacity-30 cursor-pointer">
@@ -2016,7 +2551,7 @@ export default function EditPdfStudio({ tool, file, onBack }) {
                 <button onClick={handleZoomIn} className="p-1 hover:bg-slate-700 rounded-lg cursor-pointer">
                   <ZoomIn className="w-3.5 h-3.5" />
                 </button>
-                <span className="font-mono text-slate-300 font-semibold">{Math.round(zoom * 100)}%</span>
+                <span className="font-mono text-slate-300 font-semibold">{zoom !== null ? Math.round(zoom * 100) : 0}%</span>
                 <button onClick={handleFitToScreen} className="p-1 hover:bg-slate-700 rounded-lg cursor-pointer text-slate-300" title="Fit to screen">
                   <Maximize className="w-3.5 h-3.5" />
                 </button>
@@ -2024,7 +2559,6 @@ export default function EditPdfStudio({ tool, file, onBack }) {
             )}
           </div>
 
-          {/* Sidebar — internally scrollable */}
           <div className="lg:col-span-3 min-h-0 h-full" data-format-sidebar="1">
             <div className="h-full overflow-y-auto space-y-3 pr-1">
               <TextFormatSidebar
@@ -2059,9 +2593,16 @@ export default function EditPdfStudio({ tool, file, onBack }) {
                     {additions.filter((a) => a.page === currentPage).map((a) => (
                       <div key={a.id} className="p-2 bg-blue-50/50 border border-blue-200 rounded-xl flex items-start justify-between gap-2 text-[11px]">
                         <div className="flex-1 min-w-0">
-                          <p className="text-blue-500 font-bold uppercase text-[9px]">New {a.type}</p>
+                          <p className="text-blue-500 font-bold uppercase text-[9px]">
+                            New {a.type}
+                            {a.type === 'shape' && ` · ${a.shapeType}`}
+                          </p>
                           <p className="text-slate-800 font-semibold truncate">
-                            {a.type === 'text' ? (a.text || '∅') : `Shape: ${a.shapeType}`}
+                            {a.type === 'text' && (a.text || '∅')}
+                            {a.type === 'shape' && `Shape (${a.shapeType})`}
+                            {a.type === 'highlight' && 'Highlight'}
+                            {a.type === 'image' && (a.fileName || 'Image')}
+                            {a.type === 'freehand' && `Freehand (${a.points?.length || 0} pts)`}
                           </p>
                         </div>
                         <button onClick={() => deleteAddition(a.id)} className="p-1 text-slate-400 hover:text-rose-600 rounded cursor-pointer shrink-0" title="Delete">
@@ -2072,6 +2613,14 @@ export default function EditPdfStudio({ tool, file, onBack }) {
                   </div>
                 </div>
               )}
+
+              <div className="bg-sky-50 border border-sky-200 rounded-3xl p-3 text-[11px] text-sky-900 flex items-start space-x-2">
+                <Info className="w-3.5 h-3.5 text-sky-600 shrink-0 mt-0.5" />
+                <p className="leading-relaxed">
+                  Add text, shapes, highlights, images and freehand annotations.
+                  Everything you add is embedded into the final PDF.
+                </p>
+              </div>
             </div>
           </div>
         </div>
@@ -2085,12 +2634,13 @@ export default function EditPdfStudio({ tool, file, onBack }) {
         />
       )}
 
-      {selectedAddition && selectedAddition.type === 'shape' && !result && (
-        <ShapeToolbar
+      {selectedAddition && selectedAddition.type !== 'text' && !result && (
+        <AdditionToolbar
           addition={selectedAddition}
           onChange={(patch) => updateAddition(selectedAddition.id, patch)}
           onDelete={() => deleteAddition(selectedAddition.id)}
           onMoveStart={(e) => handleAdditionDragStart(e, selectedAddition.id, 'move')}
+          onReplaceImage={handleReplaceImage}
           position={additionToolbarPos}
         />
       )}
