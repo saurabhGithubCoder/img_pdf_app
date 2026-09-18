@@ -2613,14 +2613,6 @@ export default function EditPdfStudio({ tool, file, onBack }) {
                   </div>
                 </div>
               )}
-
-              <div className="bg-sky-50 border border-sky-200 rounded-3xl p-3 text-[11px] text-sky-900 flex items-start space-x-2">
-                <Info className="w-3.5 h-3.5 text-sky-600 shrink-0 mt-0.5" />
-                <p className="leading-relaxed">
-                  Add text, shapes, highlights, images and freehand annotations.
-                  Everything you add is embedded into the final PDF.
-                </p>
-              </div>
             </div>
           </div>
         </div>
