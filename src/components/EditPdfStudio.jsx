@@ -1958,7 +1958,7 @@ export default function EditPdfStudio({ tool, file, onBack }) {
         )}
 
         {!loading && !loadFailed && (
-          <div className="shrink-0 bg-white border border-slate-200 rounded-2xl shadow-sm px-3 py-2 flex items-center justify-start">
+          <div className="shrink-0 bg-white border border-slate-200 rounded-2xl px-3 py-2 flex items-center justify-start">
             <ToolsBar
               toolMode={toolMode}
               setToolMode={setToolMode}
