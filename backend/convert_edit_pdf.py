@@ -1,19 +1,11 @@
 """
 In-place PDF editing engine powered by PyMuPDF.
 
-Supports:
-  • Existing-span edits (redact + re-insert with mixed-font preservation)
-  • New text additions
-  • Shapes (rect, ellipse, line, arrow, triangle, diamond)
-  • Highlights (semi-transparent colored rectangles)
-  • Images (base64 data URL embedded into PDF)
-  • Freehand annotations (polyline paths)
-
-Key protections:
-  • Original fonts extracted BEFORE redaction so subset is preserved.
-  • Per-character insert with explicit color + render_mode=2 to survive
-    post-redaction graphics state.
-  • Google Fonts verified as real TTF before use.
+FIXES:
+  • Only uses original subset font for chars that ACTUALLY existed in the
+    original text — avoids blank .notdef glyphs and x-advance gaps.
+  • Uses border_width=0.01 with render_mode=2 so text isn't rendered bold.
+  • "Safe" fallback font ensures every new char is always visible.
 """
 import sys
 import os
@@ -424,7 +416,7 @@ def _pick_system_file(family, bold, italic):
 
 
 # ===========================================================================
-# PRE-EXTRACT FONTS (BEFORE REDACTION!)
+# PRE-EXTRACT FONTS (BEFORE REDACTION)
 # ===========================================================================
 _page_font_cache = {}
 
@@ -574,7 +566,7 @@ def _has_glyph(font_obj, ch):
 
 
 # ===========================================================================
-# FONT REGISTRATION — page-scoped keys
+# FONT REGISTRATION
 # ===========================================================================
 _embedded_fonts = {}
 
@@ -634,13 +626,15 @@ def to_color_tuple(color):
 
 
 # ===========================================================================
-# TEXT INSERTION — segment-based with render_mode=2
+# TEXT INSERTION
 # ===========================================================================
 def _insert_text_span(page, doc, x0, y0, x1, y1, text, font_name, font_size, color,
                        original_font_name=None,
+                       original_text='',
                        preserve_original_font=True,
                        family_explicit=False,
                        font_cache=None,
+                       character_overrides=None,
                        align='left', underline=False, strike=False,
                        superscript=False, subscript=False,
                        char_spacing=0.0, h_scale=1.0,
@@ -670,17 +664,18 @@ def _insert_text_span(page, doc, x0, y0, x1, y1, text, font_name, font_size, col
         f"color=({color[0]:.3f},{color[1]:.3f},{color[2]:.3f}) "
         f"size={eff_size:.2f} preserve={preserve_original_font} explicit={family_explicit}")
 
+    original_char_set = set(str(original_text or ''))
+
     orig_entry = None
     if preserve_original_font and not superscript and not subscript and font_cache:
         orig_entry = find_original_font_in_cache(font_cache, original_font_name)
 
     orig_font_obj = None
-    orig_font_buffer = None
     orig_font_reg_name = None
     clone_font_obj = None
-    clone_font_buffer = None
-    clone_font_file = None
     clone_font_reg_name = None
+    safe_font_obj = None
+    safe_font_reg_name = None
     missing_chars = []
 
     if orig_entry:
@@ -688,42 +683,80 @@ def _insert_text_span(page, doc, x0, y0, x1, y1, text, font_name, font_size, col
         orig_font_buffer = orig_entry.get('buffer')
         if orig_font_obj:
             for ch in text:
-                if ch.strip() and not _has_glyph(orig_font_obj, ch):
+                if ch.strip() and ch not in original_char_set:
                     if ch not in missing_chars:
                         missing_chars.append(ch)
-
-        if missing_chars:
-            clone_font_obj, clone_font_buffer, clone_font_file, _cf = _get_clone_font(
-                page, doc, original_font_name, bold_flag, italic_flag
-            )
-
+                elif ch.strip() and not _has_glyph(orig_font_obj, ch):
+                    if ch not in missing_chars:
+                        missing_chars.append(ch)
         if orig_font_buffer:
             orig_font_reg_name = _register_font_buffer(
                 page, doc, orig_font_buffer, f"orig:{orig_entry.get('xref')}"
             )
-        if clone_font_file:
+
+    if missing_chars:
+        cf_obj, cf_buf, cf_file, _cf_name = _get_clone_font(
+            page, doc, original_font_name, bold_flag, italic_flag
+        )
+        if cf_file:
             clone_font_reg_name = _register_font_file(
-                page, doc, clone_font_file,
+                page, doc, cf_file,
                 f"clone_file:{original_font_name}:{bold_flag}:{italic_flag}"
             )
-        if not clone_font_reg_name and clone_font_buffer:
+            if clone_font_reg_name:
+                clone_font_obj = cf_obj
+        if not clone_font_reg_name and cf_buf:
             clone_font_reg_name = _register_font_buffer(
-                page, doc, clone_font_buffer,
+                page, doc, cf_buf,
                 f"clone_buf:{original_font_name}:{bold_flag}:{italic_flag}"
             )
+            if clone_font_reg_name:
+                clone_font_obj = cf_obj
+
+    safe_family = None
+    if font_name:
+        try:
+            safe_family, _ = detect_font_info(font_name)
+        except Exception:
+            safe_family = None
+    if not safe_family and original_font_name:
+        try:
+            safe_family, _ = detect_font_info(original_font_name)
+        except Exception:
+            safe_family = None
+    if not safe_family:
+        safe_family = 'Helvetica'
+
+    safe_sys_path = _pick_system_file(safe_family, bold_flag, italic_flag)
+    if not safe_sys_path:
+        safe_sys_path = _pick_system_file('Helvetica', bold_flag, italic_flag)
+    if safe_sys_path:
+        safe_font_reg_name = _register_font_file(
+            page, doc, safe_sys_path, f"safe:{safe_sys_path}"
+        )
+        if safe_font_reg_name:
+            try:
+                with open(safe_sys_path, 'rb') as fh:
+                    safe_font_obj = fitz.Font(fontbuffer=fh.read())
+            except Exception:
+                safe_font_obj = None
 
     log(f"  [_insert_text_span] orig={'yes' if orig_font_obj else 'NO'} "
-        f"clone={'yes' if clone_font_obj else 'no'} missing={missing_chars[:6]} "
-        f"orig_reg={orig_font_reg_name} clone_reg={clone_font_reg_name}")
+        f"clone={'yes' if clone_font_obj else 'no'} safe={'yes' if safe_font_reg_name else 'no'} "
+        f"missing={missing_chars[:8]} orig_text='{str(original_text)[:20]}'")
 
     def which_font(ch):
-        if orig_font_obj and orig_font_reg_name and _has_glyph(orig_font_obj, ch):
+        if (ch in original_char_set
+                and orig_font_obj and orig_font_reg_name
+                and _has_glyph(orig_font_obj, ch)):
             return 'orig'
-        if clone_font_reg_name:
+        if clone_font_obj and clone_font_reg_name and _has_glyph(clone_font_obj, ch):
             return 'clone'
-        if orig_font_reg_name:
-            return 'orig'
-        return 'none'
+        if safe_font_obj and safe_font_reg_name and _has_glyph(safe_font_obj, ch):
+            return 'safe'
+        if safe_font_reg_name:
+            return 'safe'
+        return 'helv'
 
     segments = []
     cur_kind = None
@@ -747,33 +780,31 @@ def _insert_text_span(page, doc, x0, y0, x1, y1, text, font_name, font_size, col
     if cur_text:
         segments.append((cur_kind, cur_text))
 
-    log(f"    segments: {[(k, t[:12]) for k, t in segments]}")
+    log(f"    segments: {[(k, t[:14]) for k, t in segments]}")
 
-    def seg_width(seg_text):
-        w = 0.0
-        for ch in seg_text:
-            if orig_font_obj and _has_glyph(orig_font_obj, ch):
-                try:
-                    w += orig_font_obj.text_length(ch, fontsize=eff_size)
-                    continue
-                except Exception:
-                    pass
-            if clone_font_obj:
-                try:
-                    w += clone_font_obj.text_length(ch, fontsize=eff_size)
-                    continue
-                except Exception:
-                    pass
-            if orig_font_obj:
-                try:
-                    w += orig_font_obj.text_length(ch, fontsize=eff_size)
-                    continue
-                except Exception:
-                    pass
-            w += eff_size * 0.5
-        return w
+    def ch_width(ch):
+        kind = which_font(ch)
+        if kind == 'orig' and orig_font_obj:
+            try:
+                return orig_font_obj.text_length(ch, fontsize=eff_size)
+            except Exception:
+                pass
+        if kind == 'clone' and clone_font_obj:
+            try:
+                return clone_font_obj.text_length(ch, fontsize=eff_size)
+            except Exception:
+                pass
+        if kind == 'safe' and safe_font_obj:
+            try:
+                return safe_font_obj.text_length(ch, fontsize=eff_size)
+            except Exception:
+                pass
+        try:
+            return fitz.get_text_length(ch, fontname='helv', fontsize=eff_size)
+        except Exception:
+            return eff_size * 0.5
 
-    total_w = sum(seg_width(t) for k, t in segments if k != 'newline')
+    total_w = sum(ch_width(c) for c in text if c != '\n')
     if use_char_spacing:
         total_w += char_spacing * max(0, len(text) - 1)
     total_w *= h_scale
@@ -790,6 +821,134 @@ def _insert_text_span(page, doc, x0, y0, x1, y1, text, font_name, font_size, col
     elif align == 'right':
         ins_x = page_right - left_margin - total_w
 
+        # Split text into runs based on character overrides
+    if character_overrides:
+        char_styles = []
+        for i, ch in enumerate(text):
+            eff_style = {
+                'fontName': font_name,
+                'fontSize': original_size,
+                'bold': bold_flag,
+                'italic': italic_flag,
+                'color': color,
+                'outlineColor': outline_color,
+                'outlineWidth': outline_width,
+                'charSpacing': char_spacing,
+            }
+            for ov in character_overrides:
+                ov_start = int(ov.get('start', 0))
+                ov_end = int(ov.get('end', 0))
+                ov_style = ov.get('style', {}) or {}
+                if ov_start <= i < ov_end:
+                    if 'fontFamily' in ov_style and ov_style['fontFamily']:
+                        # Convert family to backend font name with bold/italic
+                        bold_v = ov_style.get('bold', eff_style['bold'])
+                        italic_v = ov_style.get('italic', eff_style['italic'])
+                        fn = ov_style['fontFamily']
+                        if bold_v and italic_v: fn += '-BoldItalic'
+                        elif bold_v: fn += '-Bold'
+                        elif italic_v: fn += '-Italic'
+                        eff_style['fontName'] = fn
+                    if 'fontSize' in ov_style and ov_style['fontSize'] is not None:
+                        eff_style['fontSize'] = float(ov_style['fontSize'])
+                    if 'bold' in ov_style and ov_style['bold'] is not None:
+                        eff_style['bold'] = bool(ov_style['bold'])
+                    if 'italic' in ov_style and ov_style['italic'] is not None:
+                        eff_style['italic'] = bool(ov_style['italic'])
+                    if 'color' in ov_style and ov_style['color'] is not None:
+                        eff_style['color'] = to_color_tuple(ov_style['color'])
+                    if 'outlineColor' in ov_style and ov_style['outlineColor'] is not None:
+                        eff_style['outlineColor'] = to_color_tuple(ov_style['outlineColor'])
+                    if 'outlineWidth' in ov_style and ov_style['outlineWidth'] is not None:
+                        eff_style['outlineWidth'] = float(ov_style['outlineWidth'])
+                    if 'charSpacing' in ov_style and ov_style['charSpacing'] is not None:
+                        eff_style['charSpacing'] = float(ov_style['charSpacing'])
+            char_styles.append(eff_style)
+
+        # Group consecutive chars with same style
+        runs = []
+        cur = None
+        for i, ch in enumerate(text):
+            s = char_styles[i]
+            key = (s['fontName'], round(s['fontSize'], 2), s['bold'], s['italic'],
+                   s['color'], s['outlineColor'], round(s['outlineWidth'], 2),
+                   round(s['charSpacing'], 2))
+            if not cur or cur['key'] != key:
+                if cur:
+                    runs.append(cur)
+                cur = {'key': key, 'style': s, 'text': ch, 'start': i}
+            else:
+                cur['text'] += ch
+        if cur:
+            runs.append(cur)
+
+        # Render each run at the correct x position
+        log(f"    character_overrides → {len(runs)} runs")
+        x_cursor_r = ins_x
+        y_cursor_r = baseline_y
+        inserted_any_r = False
+        for run in runs:
+            st = run['style']
+            run_text = run['text']
+            if not run_text:
+                continue
+
+            # Resolve font for this run
+            fam_from_name, _cat = detect_font_info(st['fontName'] or '')
+            bold_r = bool(st['bold'])
+            italic_r = bool(st['italic'])
+            reg_r = None
+            sys_path_r = _pick_system_file(fam_from_name, bold_r, italic_r)
+            if sys_path_r:
+                reg_r = _register_font_file(page, doc, sys_path_r, f"runsys:{sys_path_r}:{bold_r}:{italic_r}")
+            if not reg_r and fam_from_name in GOOGLE_FONT_FAMILIES:
+                weight = 700 if bold_r else 400
+                path = _download_google_font(fam_from_name, weight, italic_r)
+                if not path and bold_r:
+                    path = _download_google_font(fam_from_name, 400, italic_r)
+                if path:
+                    reg_r = _register_font_file(page, doc, path, f"rungf:{fam_from_name}:{weight}:{italic_r}")
+            if not reg_r:
+                reg_r = 'helv'
+
+            try:
+                if st['outlineColor'] and st['outlineWidth'] and st['outlineWidth'] > 0:
+                    page.insert_text(
+                        fitz.Point(x_cursor_r, y_cursor_r), run_text,
+                        fontname=reg_r, fontsize=st['fontSize'],
+                        color=to_color_tuple(st['outlineColor']),
+                        fill=st['color'],
+                        render_mode=2,
+                        border_width=float(st['outlineWidth']),
+                        overlay=True,
+                    )
+                else:
+                    page.insert_text(
+                        fitz.Point(x_cursor_r, y_cursor_r), run_text,
+                        fontname=reg_r, fontsize=st['fontSize'],
+                        color=st['color'],
+                        render_mode=0,
+                        overlay=True,
+                    )
+                inserted_any_r = True
+            except Exception as e:
+                log(f"    run insert failed for '{run_text[:15]}': {e}")
+
+            # Advance x_cursor by measured width
+            try:
+                w = fitz.get_text_length(run_text, fontname=reg_r, fontsize=st['fontSize'])
+            except Exception:
+                w = len(run_text) * st['fontSize'] * 0.5
+            x_cursor_r += w
+            if st['charSpacing']:
+                x_cursor_r += st['charSpacing'] * max(0, len(run_text) - 1)
+
+        if inserted_any_r:
+            # Underline/strike handled separately below using full width
+            actual_width = x_cursor_r - ins_x
+            inserted_any = True
+        # else fall through to normal single-run insertion below
+
     inserted_any = False
     x_cursor = ins_x
     y_cursor = baseline_y
@@ -802,61 +961,89 @@ def _insert_text_span(page, doc, x0, y0, x1, y1, text, font_name, font_size, col
         if not seg:
             continue
 
-        reg_name = None
         if kind == 'orig':
             reg_name = orig_font_reg_name
         elif kind == 'clone':
             reg_name = clone_font_reg_name
-
-        if reg_name is None:
-            family, _ = detect_font_info(font_name or original_font_name or 'Helvetica')
-            sys_path = _pick_system_file(family, bold_flag, italic_flag)
-            if sys_path:
-                reg_name = _register_font_file(page, doc, sys_path, f"sys:{sys_path}")
-            if reg_name is None and family in GOOGLE_FONT_FAMILIES:
-                weight = 700 if bold_flag else 400
-                path = _download_google_font(family, weight, italic_flag)
-                if not path and bold_flag:
-                    path = _download_google_font(family, 400, italic_flag)
-                if path:
-                    reg_name = _register_font_file(page, doc, path, f"gf:{family}:{weight}:{italic_flag}")
+        elif kind == 'safe':
+            reg_name = safe_font_reg_name
+        else:
+            reg_name = None
 
         if reg_name is None:
             reg_name = 'helv'
 
+        ok = False
         try:
-            page.insert_text(
-                fitz.Point(x_cursor, y_cursor), seg,
-                fontname=reg_name,
-                fontsize=eff_size,
-                color=color,
-                fill=color,
-                render_mode=2,
-                overlay=True,
-            )
+            # render_mode=0 → pure fill, no stroke. This is the ONLY way
+            # to guarantee text isn't rendered bold.
+            if use_outline_condition := (outline_color is not None and outline_width > 0):
+                # User explicitly asked for an outline: fill + real stroke
+                page.insert_text(
+                    fitz.Point(x_cursor, y_cursor), seg,
+                    fontname=reg_name,
+                    fontsize=eff_size,
+                    color=to_color_tuple(outline_color),
+                    fill=color,
+                    render_mode=2,
+                    border_width=float(outline_width),
+                    overlay=True,
+                )
+            else:
+                # Normal text: fill only
+                page.insert_text(
+                    fitz.Point(x_cursor, y_cursor), seg,
+                    fontname=reg_name,
+                    fontsize=eff_size,
+                    color=color,
+                    fill=color,
+                    render_mode=0,
+                    overlay=True,
+                )
+            ok = True
             inserted_any = True
-            log(f"    Inserted {kind} segment '{seg[:15]}' x={x_cursor:.1f} y={y_cursor:.1f} font={reg_name}")
+            log(f"    Inserted [{kind}] '{seg[:15]}' x={x_cursor:.1f} font={reg_name}")
+        except TypeError:
+            # Older PyMuPDF might not accept some kwarg — retry minimal
+            try:
+                page.insert_text(
+                    fitz.Point(x_cursor, y_cursor), seg,
+                    fontname=reg_name,
+                    fontsize=eff_size,
+                    color=color,
+                    render_mode=0,
+                    overlay=True,
+                )
+                ok = True
+                inserted_any = True
+                log(f"    Inserted [minimal-kwargs] [{kind}] '{seg[:15]}' x={x_cursor:.1f}")
+            except Exception as e:
+                log(f"    insert_text failed [{kind}] '{seg[:15]}': {e}")
         except Exception as e:
-            log(f"    insert_text failed for '{seg[:15]}' ({kind}): {e}")
+            log(f"    insert_text failed [{kind}] '{seg[:15]}' via '{reg_name}': {e}")
+
+        if not ok:
             try:
                 page.insert_text(
                     fitz.Point(x_cursor, y_cursor), seg,
                     fontname='helv', fontsize=eff_size,
-                    color=color, fill=color, render_mode=2, overlay=True,
+                    color=color, render_mode=0,
+                    overlay=True,
                 )
                 inserted_any = True
-                log(f"    helv fallback OK for '{seg[:15]}'")
+                log(f"    Helvetica fallback OK for '{seg[:15]}'")
             except Exception as e2:
-                log(f"    helv fallback FAILED for '{seg[:15]}': {e2}")
+                log(f"    Helvetica fallback FAILED for '{seg[:15]}': {e2}")
 
-        x_cursor += seg_width(seg) * h_scale
+        seg_w = sum(ch_width(c) for c in seg)
+        x_cursor += seg_w * h_scale
         if use_char_spacing:
             x_cursor += char_spacing * max(0, len(seg) - 1)
 
     actual_width = x_cursor - ins_x
 
     if not inserted_any:
-        log(f"    !!! No segment could be inserted for '{text[:30]}'")
+        log(f"    !!! Nothing inserted for '{text[:30]}'")
         return
 
     if underline or strike:
@@ -876,7 +1063,6 @@ def _insert_text_span(page, doc, x0, y0, x1, y1, text, font_name, font_size, col
                 )
         except Exception as e:
             log(f"    Decoration failed: {e}")
-
 
 # ===========================================================================
 # SHAPES
@@ -935,7 +1121,6 @@ def _draw_highlight(page, x0, y0, x1, y1, color, opacity):
     rect = fitz.Rect(min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
     fill_col = to_color_tuple(color)
     op = max(0.05, min(1.0, float(opacity or 0.4)))
-    # Try the extended signature first
     try:
         page.draw_rect(
             rect,
@@ -953,7 +1138,6 @@ def _draw_highlight(page, x0, y0, x1, y1, color, opacity):
     except Exception as e:
         log(f"highlight draw (modern) failed: {e}")
 
-    # Fallback without opacity support
     try:
         page.draw_rect(rect, color=None, fill=fill_col, width=0, overlay=True)
         log(f"  Drew highlight (fallback, no opacity) at {rect}")
@@ -1014,7 +1198,6 @@ def _draw_freehand(page, points, color, stroke_width, opacity):
     except Exception as e:
         log(f"  freehand draw (modern) failed: {e}")
 
-    # Fallback
     try:
         sh = page.new_shape()
         sh.draw_polyline(pts)
@@ -1050,10 +1233,8 @@ def perform_edits(input_path, output_path, edits, additions):
         page_additions = additions_by_page.get(page_num, [])
         log(f"--- Page {page_num}: {len(page_edits)} edits, {len(page_additions)} additions")
 
-        # PRE-EXTRACT FONTS BEFORE REDACTION
         font_cache = pre_extract_page_fonts(page, doc, page_num) if page_edits else {}
 
-        # REDACT + RE-INSERT EDITS
         if page_edits:
             for e in page_edits:
                 bbox = e.get('bbox')
@@ -1094,9 +1275,11 @@ def perform_edits(input_path, output_path, edits, additions):
                     float(e.get('fontSize', 11.0)) or 11.0,
                     e.get('color', [0.0, 0.0, 0.0]),
                     original_font_name=e.get('originalFontName'),
+                    original_text=e.get('originalText', ''),
                     preserve_original_font=bool(e.get('preserveOriginalFont', False)),
                     family_explicit=bool(e.get('familyExplicit', False)),
                     font_cache=font_cache,
+                    character_overrides=e.get('characterOverrides', []),
                     align=(e.get('align') or 'left').lower(),
                     underline=bool(e.get('underline')),
                     strike=bool(e.get('strike')),
@@ -1108,12 +1291,10 @@ def perform_edits(input_path, output_path, edits, additions):
                     outline_width=float(e.get('outlineWidth', 0) or 0),
                 )
 
-        # ADDITIONS
         for a in page_additions:
             try:
                 a_type = a.get('type')
 
-                # -------- TEXT addition --------
                 if a_type == 'text':
                     bbox = a.get('bbox') or {}
                     x0 = float(bbox.get('x0', 0)); y0 = float(bbox.get('y0', 0))
@@ -1135,6 +1316,7 @@ def perform_edits(input_path, output_path, edits, additions):
                         text, font_name, font_size,
                         a.get('color', [0, 0, 0]),
                         original_font_name=None,
+                        original_text='',
                         preserve_original_font=False,
                         family_explicit=True,
                         font_cache=None,
@@ -1149,7 +1331,6 @@ def perform_edits(input_path, output_path, edits, additions):
                         outline_width=float(a.get('outlineWidth', 0) or 0),
                     )
 
-                # -------- SHAPE addition --------
                 elif a_type == 'shape':
                     bbox = a.get('bbox') or {}
                     x0 = float(bbox.get('x0', 0)); y0 = float(bbox.get('y0', 0))
@@ -1162,7 +1343,6 @@ def perform_edits(input_path, output_path, edits, additions):
                         to_color_tuple(a['fillColor']) if a.get('fillColor') else None,
                     )
 
-                # -------- HIGHLIGHT addition --------
                 elif a_type == 'highlight':
                     bbox = a.get('bbox') or {}
                     x0 = float(bbox.get('x0', 0)); y0 = float(bbox.get('y0', 0))
@@ -1173,14 +1353,12 @@ def perform_edits(input_path, output_path, edits, additions):
                         float(a.get('opacity', 0.4) or 0.4),
                     )
 
-                # -------- IMAGE addition --------
                 elif a_type == 'image':
                     bbox = a.get('bbox') or {}
                     x0 = float(bbox.get('x0', 0)); y0 = float(bbox.get('y0', 0))
                     x1 = float(bbox.get('x1', 0)); y1 = float(bbox.get('y1', 0))
                     _draw_image(page, x0, y0, x1, y1, a.get('dataUrl') or '')
 
-                # -------- FREEHAND addition --------
                 elif a_type == 'freehand':
                     _draw_freehand(
                         page,

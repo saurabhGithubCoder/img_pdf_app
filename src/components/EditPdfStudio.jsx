@@ -484,7 +484,7 @@ function ToolsBar({ toolMode, setToolMode, onImageReady, hasPendingImage, onCanc
 
   return (
     <div data-in-edit-toolbar="1"
-      className="flex items-center gap-2 flex-wrap bg-white border border-slate-200 rounded-2xl shadow-sm px-3 py-2 w-max">
+      className="flex items-center gap-2 flex-wrap bg-white px-3 py-2 w-max">
       <button type="button"
         onClick={() => { setToolMode(toolMode === 'text' ? null : 'text'); setShapesOpen(false); if (hasPendingImage) onCancelImage(); }}
         className={`${btnBase} ${toolMode === 'text' ? btnActive : btnIdle}`}>

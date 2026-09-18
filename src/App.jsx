@@ -5,13 +5,39 @@ import ToolModal from './components/ToolModal';
 import ToolStudio from './components/ToolStudio';
 import Reviews from './components/Reviews';
 import Footer from './components/Footer';
+import MobileNotSupportedModal from './components/MobileNotSupportedModal';
 import { PDF_CATEGORIES } from './data/pdfTools';
 import { Search, Lock, Sparkles, Server } from 'lucide-react';
+
+// ---------------------------------------------------------------------------
+// Phone detection
+// ---------------------------------------------------------------------------
+function isPhoneDevice() {
+  if (typeof window === 'undefined') return false;
+  const ua = navigator.userAgent || '';
+
+  // Tablets generally have enough canvas + touch — allow them
+  if (/iPad|Tablet|PlayBook|Silk/i.test(ua)) return false;
+
+  // Clear mobile phone UA
+  if (/Android.*Mobile|iPhone|iPod|Windows Phone|BlackBerry|IEMobile|Opera Mini/i.test(ua)) {
+    return true;
+  }
+
+  // Fallback: tiny screen + touch + no hover capability
+  const smallScreen = window.innerWidth < 768 && window.innerHeight < 1024;
+  const hasTouch = 'ontouchstart' in window || (navigator.maxTouchPoints || 0) > 0;
+  const noHover = typeof window.matchMedia === 'function'
+    && window.matchMedia('(hover: none)').matches;
+
+  return smallScreen && hasTouch && noHover;
+}
 
 export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [activeModalTool, setActiveModalTool] = useState(null);
   const [activeStudioSession, setActiveStudioSession] = useState(null);
+  const [showMobileBlock, setShowMobileBlock] = useState(false);
 
   const filteredCategories = useMemo(() => {
     if (!searchQuery.trim()) return PDF_CATEGORIES;
@@ -26,7 +52,24 @@ export default function App() {
     })).filter((category) => category.tools.length > 0);
   }, [searchQuery]);
 
+  // -------------------------------------------------------------------------
+  // Tool click handler — block "edit" on phones
+  // -------------------------------------------------------------------------
+  const handleToolSelect = (tool) => {
+    if (tool.id === 'edit' && isPhoneDevice()) {
+      setShowMobileBlock(true);
+      return;
+    }
+    setActiveModalTool(tool);
+  };
+
   const handleLaunchStudio = (tool, sessionData) => {
+    // Double-check mobile block for 'edit' at launch time (belt + suspenders)
+    if (tool.id === 'edit' && isPhoneDevice()) {
+      setActiveModalTool(null);
+      setShowMobileBlock(true);
+      return;
+    }
     setActiveModalTool(null);
     setActiveStudioSession({
       tool,
@@ -60,7 +103,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 font-sans antialiased flex flex-col justify-between">
       <div>
-        <Header onSelectTool={(tool) => setActiveModalTool(tool)} />
+        <Header onSelectTool={handleToolSelect} />
 
         {/* Hero Section */}
         <section className="py-14 px-4 sm:px-6 lg:px-8 max-w-5xl mx-auto text-center">
@@ -115,7 +158,7 @@ export default function App() {
                   <ToolCard
                     key={tool.id}
                     tool={tool}
-                    onSelect={(selected) => setActiveModalTool(selected)}
+                    onSelect={handleToolSelect}
                   />
                 ))}
               </div>
@@ -135,6 +178,11 @@ export default function App() {
           onClose={() => setActiveModalTool(null)}
           onLaunchStudio={handleLaunchStudio}
         />
+      )}
+
+      {/* Mobile block modal */}
+      {showMobileBlock && (
+        <MobileNotSupportedModal onClose={() => setShowMobileBlock(false)} />
       )}
     </div>
   );
