@@ -190,14 +190,14 @@ export default function TextFormatSidebar({
                 style={{ background: 'conic-gradient(from 0deg, #ef4444, #f59e0b, #eab308, #22c55e, #06b6d4, #3b82f6, #8b5cf6, #ec4899, #ef4444)' }}
                 title="Custom color" />
               {paletteOpen && (
-                <div className="absolute top-full right-0 mt-2 p-2 bg-white border border-slate-200 rounded-xl shadow-2xl grid grid-cols-4 gap-1.5 z-50">
+                <div className="absolute top-full left-0 mt-2 p-2 bg-white border border-slate-200 rounded-xl shadow-2xl grid grid-cols-4 gap-1.5 z-50 w-max">
                   {[...Array(16)].map((_, i) => {
                     const hue = (i * 24) % 360;
                     const rgb = hslToRgb(hue / 360, 0.75, 0.5);
                     return (
                       <button key={i} type="button"
                         onClick={() => { patch({ color: rgb }); setPaletteOpen(false); }}
-                        className="w-5 h-5 rounded-md border border-slate-200 hover:scale-110 transition"
+                        className="w-5 h-5 rounded-md border border-slate-200 hover:scale-110 whitespace-nowrap transition"
                         style={{ background: rgbToCss(rgb) }} />
                     );
                   })}

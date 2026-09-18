@@ -336,7 +336,7 @@ function ColorDropdown({ value, onChange, title, palette = COLOR_PALETTE, allowN
         )}
       </button>
       {open && (
-        <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 p-2 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl grid grid-cols-4 gap-1.5 z-[10000]">
+        <div className="absolute top-full left-5 -translate-x-1/2 mt-2 p-2 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl grid grid-cols-4 gap-1.5 z-[10000] w-max">
           {allowNone && (
             <button type="button"
               onClick={() => { onChange(null); setOpen(false); }}
